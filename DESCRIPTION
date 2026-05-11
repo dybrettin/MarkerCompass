@@ -20,3 +20,5 @@ Imports:
     ggplot2,
     ggtree,
     stringr
+URL: https://github.com/dybrettin/rResolution16S
+BugReports: https://github.com/dybrettin/rResolution16S/issues
