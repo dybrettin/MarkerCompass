@@ -17,15 +17,18 @@
 #' @param lpsn_db_path String. Path to the LPSN database CSV file. Can be downloaded at https://lpsn.dsmz.de/downloads
 #' @param max_contigs Numeric. Maximum allowed contigs for draft genomes. RefSeq representative genomes are always kept regardless of contig #.
 #' @param refseq_max_age Numeric. Maximum age (in days) of the local RefSeq summary file before a new one is downloaded. Set to Inf to always use the local file if it exists, or 0 to force a fresh download. Default is 30.
+#' @param keep_genomes Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space.
 #' 
-#' @import dplyr
-#' @import ggplot2
-#' @import stringr
-#' @import Biostrings
-#' @import DECIPHER
-#' @import ape
-#' @import ggtree
-#' @importFrom dplyr %>%
+#' @importFrom dplyr %>% mutate filter arrange desc select group_by slice ungroup case_when left_join bind_rows n n_distinct
+#' @importFrom ggplot2 ggplot aes labs theme_bw theme geom_bar geom_text geom_area geom_rect scale_fill_manual scale_y_continuous coord_flip element_text ggsave
+#' @importFrom stringr str_extract word
+#' @importFrom Biostrings readDNAStringSet writeXStringSet DNAStringSet DNAString reverseComplement matchPattern matchLRPatterns subseq width pairwiseAlignment alignedPattern alignedSubject
+#' @importFrom DECIPHER RemoveGaps DistanceMatrix AlignSeqs
+#' @importFrom ape njs
+#' @importFrom ggtree ggtree geom_tiplab theme_tree2 hexpand
+#' @importFrom curl curl_download
+#' @importFrom digest digest
+#' @importFrom forcats fct_relevel
 #' @return Generates output folders containing alignments, trees, mismatch reports, and resolution plots.
 #' @export
 run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobacillus"), 
@@ -38,7 +41,8 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
                              enable_lpsn_check = TRUE,
                              lpsn_db_path = "lpsn_gss.csv",
                              max_contigs = 100,
-                             refseq_max_age = 30) {
+                             refseq_max_age = 30,
+                             keep_genomes = TRUE) {
   
   # Ensure the base output directory exists
   if (!dir.exists(output_dir)) {
@@ -448,7 +452,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       aln <- readDNAStringSet(aln_file)
       aln_accs <- str_extract(names(aln), "GCF_[0-9]+\\.[0-9]+")
       if(filter_ref) aln <- aln[aln_accs %in% full_metadata$assembly_accession[full_metadata$Is_VIP]]
-      if(length(aln) < 2) return(NULL)
+      if(length(aln) < 3) return(NULL)
       tree <- njs(DistanceMatrix(aln, verbose=FALSE)); num_tips <- length(tree$tip.label)
       
       clean_tips <- gsub("_copy", " (copy", tree$tip.label)
@@ -570,11 +574,18 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       pdf(file.path(OUT_DIR, "Strict_Resolution_Comparison_RefOnly.pdf"), width=12, height=10); print(p_strict); dev.off()
       
       genus_log <- data.frame(Genus = target_genus, stringsAsFactors = FALSE)
-      for (i in 1:nrow(scores)) genus_log[[paste0("Fully_Resolved_", scores$Primer_Set[i])]] <- ifelse(scores$Percent_Resolved[i] == 100, "Yes", "No") 
+      for (i in 1:nrow(scores)) genus_log[[scores$Primer_Set[i]]] <- ifelse(scores$Percent_Resolved[i] == 100, "Yes", "No") 
       master_resolution_log[[target_genus]] <- genus_log
     }
+    # --- Space Saver Cleanup ---
+    if(!keep_genomes) {
+      message("  -> Space Saver Enabled: Deleting downloaded .fasta and .gff files...")
+      unlink(genome_folder, recursive = TRUE)
+      unlink(annot_folder, recursive = TRUE)
+    }
+    
     message(paste(">>> ANALYSIS COMPLETE FOR:", target_genus, "<<<"))
-  }
+  } # <-- This is the bracket that closes the main batch loop
   
   if (length(master_resolution_log) > 0) {
     write.csv(dplyr::bind_rows(master_resolution_log), file.path(output_dir, "Master_Resolution_Summary.csv"), row.names = FALSE)

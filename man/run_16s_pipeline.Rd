@@ -15,7 +15,8 @@ run_16s_pipeline(
   enable_lpsn_check = TRUE,
   lpsn_db_path = "lpsn_gss.csv",
   max_contigs = 100,
-  refseq_max_age = 30
+  refseq_max_age = 30,
+  keep_genomes = TRUE
 )
 }
 \arguments{
@@ -40,6 +41,8 @@ run_16s_pipeline(
 \item{max_contigs}{Numeric. Maximum allowed contigs for draft genomes. RefSeq representative genomes are always kept regardless of contig #.}
 
 \item{refseq_max_age}{Numeric. Maximum age (in days) of the local RefSeq summary file before a new one is downloaded. Set to Inf to always use the local file if it exists, or 0 to force a fresh download. Default is 30.}
+
+\item{keep_genomes}{Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space.}
 }
 \value{
 Generates output folders containing alignments, trees, mismatch reports, and resolution plots.
