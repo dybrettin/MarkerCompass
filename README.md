@@ -52,7 +52,8 @@ Because `rResolution16S` relies on powerful data manipulation and bioinformatics
 
 ```r
 
-suppressPackageStartupMessages(library(rResolution16S))
+# Load the package
+library(rResolution16S)
 
 # Overview of standard options
 run_16s_pipeline(
