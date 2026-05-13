@@ -14,31 +14,7 @@ Primer Bias: "Universal" primers often contain mismatches against specific clade
 
 rResolution16S solves this by taking a targeted, data-driven approach. Before beginning library preparation or sequencing, researchers can use this package to objectively determine which primer set yields the highest species-level resolution for their specific taxa of interest, while quantifying and avoiding critical primer mismatches. Alternatively, with metabarcoded datasets, the genus level taxonomy can be fed into rResolution16S in order to determine which taxa can be confidently classified to the species level and which cannot.
 
-```mermaid
-graph TD
-    classDef default fill:#f8f9fa,stroke:#343a40,stroke-width:2px,color:#000;
-    classDef highlight fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#000;
-    classDef drop fill:#ffebee,stroke:#c62828,stroke-width:2px,color:#000;
-
-    A[Target Genera Input]:::highlight --> B(NCBI RefSeq Download)
-    
-    B --> C{LPSN Nomenclature Check<br/>*Optional*}
-    B -. "If Disabled" .-> D
-    
-    C -- "Validly Published" --> D[16S rRNA Extraction via .gff]
-    C -- "Synonym/Invalid" --> Z[Discard/Flag]:::drop
-    
-    D --> E[Dereplication of Polymorphic Copies]
-    E --> F[In silico PCR & Alignment]:::highlight
-    
-    F --> G[IUPAC-Aware Mismatch Mapping]
-    F --> H[Distance Matrices & Neighbor-Joining Trees]
-    F --> I[Sequence Entropy Mapping]
-    
-    G --> J((Final Resolution & Coverage Metrics)):::highlight
-    H --> J
-    I --> J
-```
+![Pipeline Methodology](man/figures/flowchart_4_rResolution16S.png)
 
 The run_16s_pipeline() function executes a completely automated, multi-phase workflow:
 
@@ -57,7 +33,7 @@ Extracted sequences are aligned using MAFFT (Katoh & Standley, 2013) if a path i
 Phylogenetic Resolution & Entropy Mapping -
 Extracted amplicons are converted into distance matrices to calculate the percentage of reference species perfectly resolved by each hypervariable region. Outputs include customized ggtree (Yu et al., 2017) phylogenetic visualizations, sequence entropy maps, and a simple primer resolution report providing visual confirmation of region suitability. A master summary file is also generated at the genera level to give a quick snapshot of the level of resolution for all genera inputed at the start of a run for each primer pair.
 
-## Installation vis GitHub
+## Installation via GitHub
 ```r
 #Install the remotes package if not already present
 if (!requireNamespace("remotes", quietly = TRUE)) {
@@ -90,7 +66,8 @@ run_16s_pipeline(
     enable_lpsn_check = TRUE,
     lpsn_db_path = "FILE_PATH_TO/lpsn_gss_2026-02-10.csv",
     max_contigs = 100,
-    refseq_max_age = 30)
+    refseq_max_age = 30,
+    keep_genomes = TRUE)
 ```
 
 ### Parameter Explanations
