@@ -23,6 +23,7 @@
 #' @importFrom ggplot2 ggplot aes labs theme_bw theme geom_bar geom_text geom_area geom_rect scale_fill_manual scale_y_continuous coord_flip element_text ggsave
 #' @importFrom stringr str_extract word
 #' @importFrom Biostrings readDNAStringSet writeXStringSet DNAStringSet DNAString reverseComplement matchPattern matchLRPatterns subseq width pairwiseAlignment alignedPattern alignedSubject
+#' @importFrom IRanges subject
 #' @importFrom DECIPHER RemoveGaps DistanceMatrix AlignSeqs
 #' @importFrom ape njs
 #' @importFrom ggtree ggtree geom_tiplab theme_tree2 hexpand
@@ -356,7 +357,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       } else { return(AlignSeqs(seqs, verbose = FALSE)) }
     }
     
-    # Custom function to generate IUPAC-aware visual alignments
+  # Custom function to generate IUPAC-aware visual alignments
     get_mismatch_info <- function(primer_seq, target_seq) {
       aln <- Biostrings::pairwiseAlignment(primer_seq, target_seq, type="overlap")
       
@@ -367,10 +368,14 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       p_aln <- strsplit(p_aln_str, "")[[1]]
       t_aln <- strsplit(t_aln_str, "")[[1]]
       
+      # SAFEGUARD: If the alignment is completely empty due to a truncated genome edge
+      if(length(p_aln) == 0) return(list(Target_Seq = "", Visual = "", Misses = nchar(primer_seq)))
+      
       visual <- character(length(p_aln))
       mismatches <- 0
       
-      for(k in 1:length(p_aln)) {
+      # Use seq_along instead of 1:length to prevent the 1:0 looping bug
+      for(k in seq_along(p_aln)) {
         p <- toupper(p_aln[k]); t <- toupper(t_aln[k])
         if (p == t && p != "-") {
           visual[k] <- "."
@@ -415,8 +420,18 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
             current_amplicons <- c(current_amplicons, DNAStringSet(amp)); names(current_amplicons)[length(current_amplicons)] <- paste0(names(target_seqs)[i], "_", region_name)
             tryCatch({
               full_amp_seq <- if(orientation == "Fwd") subj else subj_rc; start_idx <- start(hit); end_idx <- end(hit)
-              fwd_bind <- subseq(full_amp_seq, start_idx, start_idx + length(fwd_primer) - 1)
-              rev_bind <- subseq(full_amp_seq, end_idx - length(rev_primer) + 1, end_idx)
+              # Get the true length of the sequence
+              full_amp_length <- length(full_amp_seq)
+              
+              # Safely clamp forward primer coordinates to sequence boundaries
+              fwd_start_safe <- max(1, start_idx)
+              fwd_end_safe <- min(full_amp_length, start_idx + length(fwd_primer) - 1)
+              fwd_bind <- subseq(full_amp_seq, fwd_start_safe, fwd_end_safe)
+              
+              # Safely clamp reverse primer coordinates to sequence boundaries
+              rev_start_safe <- max(1, end_idx - length(rev_primer) + 1)
+              rev_end_safe <- min(full_amp_length, end_idx)
+              rev_bind <- subseq(full_amp_seq, rev_start_safe, rev_end_safe)
               
               # Run our custom visual alignment function
               f_res <- get_mismatch_info(as.character(fwd_primer), as.character(fwd_bind))
@@ -476,17 +491,61 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
         backbone_aligned <- aln_set[best_name]; backbone_clean <- RemoveGaps(backbone_aligned)
         entropy_scores <- apply(as.matrix(aln_set), 2, function(col) { bases <- col[!col %in% c("-","N",".")]; if(length(bases)==0) return(0); freqs <- table(bases)/length(bases); -sum(freqs*log2(freqs)) })
         entropy_df <- data.frame(Position=1:length(entropy_scores), Entropy=entropy_scores)
-        amplicon_map <- data.frame()
+        # 1. Gather the backbone and all its corresponding amplicons into a single list
+        seqs_to_align <- DNAStringSet(backbone_clean)
+        names(seqs_to_align) <- "Backbone"
+        primer_names <- c()
+        
         for(f in list.files(OUT_DIR, pattern="^Alignment_.*\\.fasta$", full.names=TRUE)[basename(list.files(OUT_DIR, pattern="^Alignment_.*\\.fasta$", full.names=TRUE)) != "Alignment_Full_Extracted_16S.fasta"]) {
-          r_aln <- readDNAStringSet(f); rel_idx <- which(sub(paste0("_", sub("Alignment_", "", sub("\\.fasta$", "", basename(f))), "$"), "", names(r_aln)) %in% names(aln_set))
-          if(length(rel_idx)>0) {
-            hit <- matchPattern(RemoveGaps(r_aln[rel_idx[1]])[[1]], backbone_clean[[1]], max.mismatch=5)
-            if(length(hit)>0) {
-              get_aln_pos <- function(pos, aln_str) { is_base <- strsplit(as.character(aln_str), "")[[1]] != "-"; match_col <- which(cumsum(is_base) == pos); if(length(match_col) > 0) return(match_col[1]) else return(pos) }
-              amplicon_map <- rbind(amplicon_map, data.frame(Primer_Set=sub("Alignment_", "", sub("\\.fasta$", "", basename(f))), Start_Aln=get_aln_pos(start(hit)[1], backbone_aligned[[1]]), End_Aln=get_aln_pos(end(hit)[1], backbone_aligned[[1]])))
+          primer_set_name <- sub("Alignment_", "", sub("\\.fasta$", "", basename(f)))
+          r_aln <- readDNAStringSet(f)
+          
+          rel_idx <- which(sub(paste0("_", primer_set_name, "$"), "", names(r_aln)) %in% names(aln_set))
+          if(length(rel_idx) > 0) {
+            backbone_amp_name <- paste0(best_name, "_", primer_set_name)
+            amp_to_map <- if(backbone_amp_name %in% names(r_aln)) RemoveGaps(r_aln[backbone_amp_name])[[1]] else RemoveGaps(r_aln[rel_idx[1]])[[1]]
+            
+            new_seq <- DNAStringSet(amp_to_map)
+            names(new_seq) <- primer_set_name
+            seqs_to_align <- c(seqs_to_align, new_seq)
+            primer_names <- c(primer_names, primer_set_name)
+          }
+        }
+        
+        amplicon_map <- data.frame()
+        if (length(seqs_to_align) > 1) {
+          # 2. Align them all together (just like the Test_alignment.fasta you made)
+          mini_aln <- smart_align(seqs_to_align, mafft_exec = mafft_path)
+          
+          bb_aln_str <- as.character(mini_aln["Backbone"][[1]])
+          bb_is_base <- strsplit(bb_aln_str, "")[[1]] != "-"
+          
+          get_aln_pos <- function(pos, aln_str) { is_base <- strsplit(as.character(aln_str), "")[[1]] != "-"; match_col <- which(cumsum(is_base) == pos); if(length(match_col) > 0) return(match_col[1]) else return(pos) }
+          
+          # 3. Read the exact coordinates straight out of the alignment
+          for (p_name in primer_names) {
+            amp_aln_str <- as.character(mini_aln[p_name][[1]])
+            amp_is_base <- strsplit(amp_aln_str, "")[[1]] != "-"
+            
+            if (any(amp_is_base)) {
+              # Find first and last physical base in the aligned amplicon
+              start_idx <- which(amp_is_base)[1]
+              end_idx <- rev(which(amp_is_base))[1]
+              
+              # Count how many absolute bases exist in the backbone up to those points
+              start_clean <- sum(bb_is_base[1:start_idx])
+              end_clean <- sum(bb_is_base[1:end_idx])
+              
+              # Map those absolute coordinates onto the final PDF Master Alignment gaps
+              amplicon_map <- rbind(amplicon_map, data.frame(
+                Primer_Set = p_name, 
+                Start_Aln = get_aln_pos(max(1, start_clean), backbone_aligned[[1]]), 
+                End_Aln = get_aln_pos(max(1, end_clean), backbone_aligned[[1]])
+              ))
             }
           }
         }
+        
         p_basic <- ggplot() + geom_area(data=entropy_df, aes(x=Position, y=Entropy), fill="gray90", color="gray70", linewidth=0.2) + labs(title=paste("Entropy:", target_genus, title_suffix), subtitle=paste("Backbone:", gsub("_", " ", best_name)), y="Entropy") + theme_bw()
         if(nrow(amplicon_map) > 0) {
           amplicon_map <- amplicon_map %>% arrange(Start_Aln); amplicon_map$Track <- NA; tracks <- c()
