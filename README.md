@@ -41,7 +41,7 @@ if (!requireNamespace("remotes", quietly = TRUE)) {
 }
 
 #Install rResolution16S 
-remotes::install_github("YourGitHubUsername/rResolution16S", quiet = TRUE)
+remotes::install_github("dybrettin/rResolution16S", quiet = TRUE)
 ```
 (Note: Ensure MAFFT is installed on your system and accessible via your system PATH, though the package will fall back to DECIPHER if MAFFT is unavailable).
 
