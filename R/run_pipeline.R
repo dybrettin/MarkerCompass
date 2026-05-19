@@ -19,7 +19,7 @@
 #' @param refseq_max_age Numeric. Maximum age (in days) of the local RefSeq summary file before a new one is downloaded. Set to Inf to always use the local file if it exists, or 0 to force a fresh download. Default is 30.
 #' @param keep_genomes Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space.
 #' 
-#' @importFrom dplyr %>% mutate filter arrange desc select group_by slice ungroup case_when left_join bind_rows n n_distinct
+#' @importFrom dplyr %>% mutate filter arrange desc select group_by slice ungroup case_when left_join bind_rows n n_distinct relocate
 #' @importFrom ggplot2 ggplot aes labs theme_bw theme geom_bar geom_text geom_area geom_rect scale_fill_manual scale_y_continuous coord_flip element_text ggsave
 #' @importFrom stringr str_extract word
 #' @importFrom Biostrings readDNAStringSet writeXStringSet DNAStringSet DNAString reverseComplement matchPattern matchLRPatterns subseq width pairwiseAlignment alignedPattern alignedSubject
@@ -245,6 +245,50 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
     cat("\n")
     
     full_metadata <- filtered_meta %>% filter(!is.na(local_path)) %>% mutate(Isolation_Source="Unknown", Host="Unknown", Country="Unknown")
+    
+    # --- Fetch Full Taxonomy Lineage ---
+    message(paste("  -> Fetching full NCBI taxonomy for", target_genus, "..."))
+    tax_info <- tryCatch({
+      # Search NCBI Taxonomy for the target genus
+      search_res <- rentrez::entrez_search(db="taxonomy", term=paste0(target_genus, "[Scientific Name]"))
+      
+      if(length(search_res$ids) > 0) {
+        # Fetch the XML lineage data
+        tax_xml <- rentrez::entrez_fetch(db="taxonomy", id=search_res$ids[1], rettype="xml")
+        xml_doc <- xml2::read_xml(tax_xml)
+        
+        # Extract the taxonomic ranks and names
+        nodes <- xml2::xml_find_all(xml_doc, "//LineageEx/Taxon")
+        ranks <- xml2::xml_text(xml2::xml_find_all(nodes, ".//Rank"))
+        names <- xml2::xml_text(xml2::xml_find_all(nodes, ".//ScientificName"))
+        dict <- setNames(names, ranks)
+        
+        list(
+          Phylum = ifelse("phylum" %in% names(dict), dict["phylum"], NA),
+          Class = ifelse("class" %in% names(dict), dict["class"], NA),
+          Order = ifelse("order" %in% names(dict), dict["order"], NA),
+          Family = ifelse("family" %in% names(dict), dict["family"], NA)
+        )
+      } else { 
+        list(Phylum=NA, Class=NA, Order=NA, Family=NA) 
+      }
+    }, error = function(e) { 
+      message("  -> [WARNING] Taxonomy fetch failed (Check internet or NCBI status).")
+      list(Phylum=NA, Class=NA, Order=NA, Family=NA) 
+    })
+
+    # --- Enrich Metadata with Full Lineage ---
+    full_metadata <- full_metadata %>%
+      mutate(
+        Phylum = tax_info$Phylum,
+        Class = tax_info$Class,
+        Order = tax_info$Order,
+        Family = tax_info$Family,
+        Genus = target_genus,
+        Species = gsub("\\[|\\]", "", stringr::word(organism_name, 1, 2))
+      ) %>%
+      relocate(Phylum, Class, Order, Family, Genus, Species, .after = organism_name)
+
     write.csv(full_metadata, file.path(OUT_DIR, "genome_metadata_refseq_enriched.csv"), row.names=FALSE)
     
     # --- Phase 3.5: LPSN Check ---
