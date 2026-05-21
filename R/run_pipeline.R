@@ -8,6 +8,7 @@
 #'
 #' @param target_genera A character vector of genera to analyze (e.g., c("Gilliamella", "Snodgrassella")) or input a .csv file with a list of genera and all will be processed with a log file to summarize resolution of primers for each genus.
 #' @param output_dir String. Path to the folder where results should be saved. Defaults to current working directory. Each genera targeted generates a new folder in the output directory with all output files
+#' @param db_dir String. Path to the directory where master databases (NCBI summary, LPSN) are stored. Defaults to current working directory. Setting this to a static folder saves your laptop's bandwidth by preventing the pipeline from re-downloading the databases for every new output directory.
 #' @param mafft_path String. Path to MAFFT executable (default: "mafft"). If MAFFT is not found, the pipeline automatically falls back to DECIPHER. Set to "" to intentionally force DECIPHER and bypass the MAFFT system check.
 #' @param custom_primers Optional. Path to a CSV file or an R list containing custom primer sets. 
 #' @param only_reference Logical. If TRUE, only uses RefSeq/Representative genomes. Some RefSeq/Representative genomes are not validily published according to LPSN, so enable that setting as well if wanting only validly published reference species. TRUE is recommended as some genera have many poor quality genomes.
@@ -17,9 +18,12 @@
 #' @param lpsn_db_path String. Path to the LPSN database CSV file. Can be downloaded at https://lpsn.dsmz.de/downloads
 #' @param max_contigs Numeric. Maximum allowed contigs for draft genomes. RefSeq representative genomes are always kept regardless of contig #.
 #' @param refseq_max_age Numeric. Maximum age (in days) of the local RefSeq summary file before a new one is downloaded. Set to Inf to always use the local file if it exists, or 0 to force a fresh download. Default is 30.
-#' @param keep_genomes Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space.
+#' @param max_tax_level String. The highest taxonomic level to assess for clade resolution (e.g., "Genus", "Family", "Order", "Class", "Phylum"). Computation resources and time increase dramatically with increase taxa levels.
+#' @param n_threats Numeric. The number of closest outgroup genera to pull full species data and align. Defaults to 2.
+#' @param max_scout_genera Numeric. Maximum number of outgroup genera to fetch during the phylogenetic scout phase. Defaults to 50. Set to Inf for unlimited. A setting to tune as needed based on time and computational resources.
+#' @param keep_genomes Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space. Unless you have a lot of extra space FALSE is recommended when going above the genus level.
 #' 
-#' @importFrom dplyr %>% mutate filter arrange desc select group_by slice ungroup case_when left_join bind_rows n n_distinct relocate
+#' @importFrom dplyr %>% mutate filter arrange desc select group_by slice ungroup case_when left_join bind_rows n n_distinct relocate summarize
 #' @importFrom ggplot2 ggplot aes labs theme_bw theme geom_bar geom_text geom_area geom_rect scale_fill_manual scale_y_continuous coord_flip element_text ggsave
 #' @importFrom stringr str_extract word
 #' @importFrom Biostrings readDNAStringSet writeXStringSet DNAStringSet DNAString reverseComplement matchPattern matchLRPatterns subseq width pairwiseAlignment alignedPattern alignedSubject
@@ -34,6 +38,7 @@
 #' @export
 run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobacillus"), 
                              output_dir = ".",
+                             db_dir = ".",
                              mafft_path = "mafft",
                              custom_primers = NULL,
                              only_reference = TRUE,
@@ -43,6 +48,9 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
                              lpsn_db_path = "lpsn_gss.csv",
                              max_contigs = 100,
                              refseq_max_age = 30,
+                             max_tax_level = "Genus",
+                             n_threats = 2,
+                             max_scout_genera = 50,
                              keep_genomes = TRUE) {
   
   # Ensure the base output directory exists
@@ -97,7 +105,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
   message("--- PRE-FLIGHT: Loading Master Databases ---")
   
   # A. FETCH NCBI SUMMARY
-  dest_file <- file.path(output_dir, "assembly_summary_refseq.txt")
+  dest_file <- file.path(db_dir, "assembly_summary_refseq.txt")
   should_download <- TRUE
   
   if(file.exists(dest_file)) {
@@ -133,12 +141,15 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
     stringsAsFactors = FALSE
   )
   
-  # B. LOAD LPSN
+ # B. LOAD LPSN
   master_lpsn_clean <- NULL
   if(enable_lpsn_check) {
-    if(file.exists(lpsn_db_path)) {
-      message(paste("  -> Loading LPSN database:", basename(lpsn_db_path)))
-      lpsn <- tryCatch(read.csv(lpsn_db_path, stringsAsFactors=FALSE, fill=TRUE), error=function(e) NULL)
+    # Dynamically route to db_dir if only a filename is provided
+    actual_lpsn_path <- if (basename(lpsn_db_path) == lpsn_db_path) file.path(db_dir, lpsn_db_path) else lpsn_db_path
+    
+    if(file.exists(actual_lpsn_path)) {
+      message(paste("  -> Loading LPSN database:", basename(actual_lpsn_path)))
+      lpsn <- tryCatch(read.csv(actual_lpsn_path, stringsAsFactors=FALSE, fill=TRUE), error=function(e) NULL)
       if(!is.null(lpsn)) {
         sp_col <- if("sp_epithet" %in% colnames(lpsn)) "sp_epithet" else "species_epithet"
         master_lpsn_clean <- lpsn %>%
@@ -152,7 +163,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
           group_by(Full_Name) %>% arrange(desc(is_valid)) %>% dplyr::slice(1) %>% ungroup() %>% select(-is_valid)
       }
     } else {
-      message(paste("  [WARNING] LPSN file not found at:", lpsn_db_path, "- Check skipped."))
+      message(paste("  [WARNING] LPSN file not found at:", actual_lpsn_path, "- Check skipped."))
       enable_lpsn_check <- FALSE
     }
   }
@@ -161,6 +172,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
   # MAIN BATCH LOOP
   # =================
   master_resolution_log <- list()
+  master_higher_taxa_log <- list()
   
   for (target_genus in target_genera) {
     message(paste("\n======================================================================"))
@@ -169,6 +181,19 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
     
     OUT_DIR <- file.path(output_dir, paste0("analysis_refseq_", target_genus))
     if(!dir.exists(OUT_DIR)) dir.create(OUT_DIR)
+    
+    # --- Establish Organized Subdirectories ---
+    dir_genomes    <- file.path(OUT_DIR, "01_Genomes")
+    dir_annots     <- file.path(OUT_DIR, "02_Annotations")
+    dir_alignments <- file.path(OUT_DIR, "03_Alignments")
+    dir_trees      <- file.path(OUT_DIR, "04_Trees")
+    dir_entropy    <- file.path(OUT_DIR, "05_Entropy_Maps")
+    dir_logs       <- file.path(OUT_DIR, "06_Logs")
+    dir_results    <- file.path(OUT_DIR, "07_Resolution_Results")
+    
+    for(d in c(dir_genomes, dir_annots, dir_alignments, dir_trees, dir_entropy, dir_logs, dir_results)) {
+      if(!dir.exists(d)) dir.create(d)
+    }
     
     # --- Phase 3: Metadata Filtering & QC ---
     message("--- Phase 3: Metadata & QC ---")
@@ -197,7 +222,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
     
     filtered_meta$contig_count[is.na(filtered_meta$contig_count)] <- 0
     filtered_meta$QC_Status <- ifelse((filtered_meta$contig_count <= max_contigs) | filtered_meta$Is_VIP, "Pass", "Drop_HighContigs")
-    write.csv(filtered_meta %>% select(assembly_accession, organism_name, contig_count, QC_Status), file.path(OUT_DIR, "QC_Contig_Report.csv"), row.names = FALSE)
+    write.csv(filtered_meta %>% select(assembly_accession, organism_name, contig_count, QC_Status), file.path(dir_logs, "QC_Contig_Report.csv"), row.names = FALSE)
     filtered_meta <- filtered_meta %>% filter(QC_Status == "Pass")
     
     if(dereplicate_strains) {
@@ -219,10 +244,6 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
         Display_Name = gsub("[^a-zA-Z0-9_\\.]", "_", Display_Name) # FASTA Safe
       )
     
-    genome_folder <- file.path(OUT_DIR, "genomes"); annot_folder <- file.path(OUT_DIR, "annotations")
-    if(!dir.exists(genome_folder)) dir.create(genome_folder)
-    if(!dir.exists(annot_folder)) dir.create(annot_folder)
-    
     filtered_meta$local_path <- NA; filtered_meta$local_gff <- NA
     message(paste("  -> Processing", nrow(filtered_meta), "genomes for", target_genus, "..."))
     
@@ -232,8 +253,8 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       folder_name <- basename(ftp_base)
       base_name <- filtered_meta$Display_Name[i]
       
-      dest_genomic <- file.path(genome_folder, paste0(base_name, ".fna.gz"))
-      dest_gff     <- file.path(annot_folder, paste0(base_name, ".gff.gz"))
+      dest_genomic <- file.path(dir_genomes, paste0(base_name, ".fna.gz"))
+      dest_gff     <- file.path(dir_annots, paste0(base_name, ".gff.gz"))
       
       if(!file.exists(dest_genomic)) tryCatch({ curl::curl_download(paste0(ftp_base, "/", folder_name, "_genomic.fna.gz"), dest_genomic, quiet=TRUE) }, error=function(e) {})
       if(!file.exists(dest_gff)) tryCatch({ curl::curl_download(paste0(ftp_base, "/", folder_name, "_genomic.gff.gz"), dest_gff, quiet=TRUE) }, error=function(e) {})
@@ -289,7 +310,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       ) %>%
       relocate(Phylum, Class, Order, Family, Genus, Species, .after = organism_name)
 
-    write.csv(full_metadata, file.path(OUT_DIR, "genome_metadata_refseq_enriched.csv"), row.names=FALSE)
+    write.csv(full_metadata, file.path(dir_logs, "genome_metadata_refseq_enriched.csv"), row.names=FALSE)
     
     # --- Phase 3.5: LPSN Check ---
     message("--- Phase 3.5: LPSN Check ---")
@@ -311,7 +332,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       invalid <- full_metadata %>% filter(!Is_Valid_LPSN)
       if(nrow(invalid) > 0) {
         message(paste("  -> [WARNING]", nrow(invalid), "genomes failed LPSN checks."))
-        write.csv(validation_df %>% filter(!Is_Valid_LPSN) %>% select(assembly_accession, organism_name, Check_Name, Failure_Reason), file.path(OUT_DIR, "LPSN_Invalid_Species_Report.csv"), row.names=FALSE)
+        write.csv(validation_df %>% filter(!Is_Valid_LPSN) %>% select(assembly_accession, organism_name, Check_Name, Failure_Reason), file.path(dir_logs, "LPSN_Invalid_Species_Report.csv"), row.names=FALSE)
         full_metadata <- full_metadata %>% mutate(Is_VIP = ifelse(!Is_Valid_LPSN, FALSE, Is_VIP))
       }
       full_metadata$Check_Name <- NULL; full_metadata$Is_Valid_LPSN <- NULL
@@ -364,8 +385,8 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       res <- extract_16s_manual(full_metadata$local_path[i], full_metadata$local_gff[i], full_metadata$Display_Name[i])
       if(!is.null(res)) { all_16s_seqs <- c(all_16s_seqs, res); status_df$Status[i] <- "Found"; status_df$Count[i] <- length(res) } else status_df$Status[i] <- "Missing"
     }
-    write.csv(status_df, file.path(OUT_DIR, "extraction_status_report.csv"), row.names=FALSE)
-    writeXStringSet(all_16s_seqs, file.path(OUT_DIR, "all_genomes_16S_general.fasta"))
+    write.csv(status_df, file.path(dir_logs, "extraction_status_report.csv"), row.names=FALSE)
+    writeXStringSet(all_16s_seqs, file.path(dir_alignments, "all_genomes_16S_general.fasta"))
     
     if(length(all_16s_seqs) == 0) { message("  -> [SKIP] No 16S extracted. Skipping."); next }
     
@@ -396,7 +417,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       }
       if (use_mafft) {
         tmp_in <- tempfile(fileext=".fasta"); tmp_out <- tempfile(fileext=".fasta")
-        writeXStringSet(seqs, tmp_in); system2(mafft_exec, args = c("--auto", "--quiet", tmp_in), stdout = tmp_out)
+        writeXStringSet(seqs, tmp_in); system2(mafft_exec, args = c("--auto", "--quiet", tmp_in), stdout = tmp_out, stderr = FALSE)
         aligned_seqs <- readDNAStringSet(tmp_out); unlink(c(tmp_in, tmp_out)); return(aligned_seqs)
       } else { return(AlignSeqs(seqs, verbose = FALSE)) }
     }
@@ -440,7 +461,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
     }
 
     target_seqs <- smart_align(general_16s, mafft_exec = mafft_path)
-    writeXStringSet(target_seqs, file.path(OUT_DIR, "Alignment_Full_Extracted_16S.fasta"))
+    writeXStringSet(target_seqs, file.path(dir_alignments, "Alignment_Full_Extracted_16S.fasta"))
     primer_mismatch_report <- data.frame() 
     
     for (region_name in names(primer_sets)) {
@@ -501,9 +522,9 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
           }
         }
       }
-      if(length(current_amplicons) >= 1) { aln <- smart_align(current_amplicons, mafft_exec = mafft_path); writeXStringSet(aln, file.path(OUT_DIR, paste0("Alignment_", region_name, ".fasta"))) }
+      if(length(current_amplicons) >= 1) { aln <- smart_align(current_amplicons, mafft_exec = mafft_path); writeXStringSet(aln, file.path(dir_alignments, paste0("Alignment_", region_name, ".fasta"))) }
     }
-    if(nrow(primer_mismatch_report) > 0) write.csv(primer_mismatch_report, file.path(OUT_DIR, "primer_mismatch_report_summary.csv"), row.names=FALSE)
+    if(nrow(primer_mismatch_report) > 0) write.csv(primer_mismatch_report, file.path(dir_logs, "primer_mismatch_report_summary.csv"), row.names=FALSE)
     
     # --- Phase 7: Trees ---
     message("--- Phase 7: Trees ---")
@@ -519,14 +540,18 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       
       options(ignore.negative.edge=TRUE)
       p <- ggtree(tree) + geom_tiplab(size=2) + theme_tree2() + labs(title=paste0(basename(aln_file), suffix)) + hexpand(0.5)
-      ggsave(file.path(OUT_DIR, paste0("Tree_", basename(aln_file), suffix, ".pdf")), p, width=15, height=max(10, num_tips*0.2), limitsize=FALSE)
+      ggsave(file.path(dir_trees, paste0("Tree_", basename(aln_file), suffix, ".pdf")), p, width=15, height=max(10, num_tips*0.2), limitsize=FALSE)
     }
-    files <- list.files(OUT_DIR, pattern="^Alignment_.*\\.fasta$", full.names=TRUE)
-    for(f in files) { plot_tree(f, "_All"); plot_tree(f, "_RefOnly", TRUE) }
+
+    files <- list.files(dir_alignments, pattern="^Alignment_.*\\.fasta$", full.names=TRUE)
+    for(f in files) { 
+      if(!only_reference) plot_tree(f, "_All")
+      plot_tree(f, "_RefOnly", TRUE) 
+    }
     
     # --- Phase 8: Entropy Maps ---
     message("--- Phase 8: Entropy Maps ---")
-    aln_file <- file.path(OUT_DIR, "Alignment_Full_Extracted_16S.fasta")
+    aln_file <- file.path(dir_alignments, "Alignment_Full_Extracted_16S.fasta")
     if(file.exists(aln_file)) {
       master_aln <- readDNAStringSet(aln_file)
       generate_entropy_analysis <- function(aln_set, subset_name, title_suffix) {
@@ -540,7 +565,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
         names(seqs_to_align) <- "Backbone"
         primer_names <- c()
         
-        for(f in list.files(OUT_DIR, pattern="^Alignment_.*\\.fasta$", full.names=TRUE)[basename(list.files(OUT_DIR, pattern="^Alignment_.*\\.fasta$", full.names=TRUE)) != "Alignment_Full_Extracted_16S.fasta"]) {
+        for(f in list.files(dir_alignments, pattern="^Alignment_.*\\.fasta$", full.names=TRUE)[basename(list.files(dir_alignments, pattern="^Alignment_.*\\.fasta$", full.names=TRUE)) != "Alignment_Full_Extracted_16S.fasta"]) {
           primer_set_name <- sub("Alignment_", "", sub("\\.fasta$", "", basename(f)))
           r_aln <- readDNAStringSet(f)
           
@@ -595,10 +620,11 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
           amplicon_map <- amplicon_map %>% arrange(Start_Aln); amplicon_map$Track <- NA; tracks <- c()
           for(i in 1:nrow(amplicon_map)) { s <- amplicon_map$Start_Aln[i]; e <- amplicon_map$End_Aln[i]; assigned <- FALSE; if(length(tracks)>0) for(t in 1:length(tracks)) if(tracks[t]+50 < s) { amplicon_map$Track[i] <- t; tracks[t] <- e; assigned <- TRUE; break }; if(!assigned) { nt <- length(tracks)+1; amplicon_map$Track[i] <- nt; tracks[nt] <- e } }
           p_valid <- p_basic + geom_rect(data=mutate(amplicon_map, Y = -0.2 - ((Track-1) * 0.1)), aes(xmin=Start_Aln, xmax=End_Aln, ymin=Y, ymax=Y+0.05, fill="Primer"), color="black") + geom_text(data=mutate(amplicon_map, Y = -0.2 - ((Track-1) * 0.1)), aes(x=(Start_Aln+End_Aln)/2, y=Y+0.025, label=Primer_Set), size=2)
-          pdf(file.path(OUT_DIR, paste0("Entropy_Map", subset_name, ".pdf")), width=12, height=8); print(p_valid); dev.off()
+          pdf(file.path(dir_entropy, paste0("Entropy_Map", subset_name, ".pdf")), width=12, height=8); print(p_valid); dev.off()
         }
       }
-      generate_entropy_analysis(master_aln, "_All", "(All)")
+      if(!only_reference) generate_entropy_analysis(master_aln, "_All", "(All)")
+      
       ref_aln <- master_aln[str_extract(names(master_aln), "GCF_[0-9]+\\.[0-9]+") %in% full_metadata$assembly_accession[full_metadata$Is_VIP]]
       if(length(ref_aln)>=1) generate_entropy_analysis(ref_aln, "_RefOnly", "(RefOnly)")
     }
@@ -608,7 +634,7 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
     ref_meta <- full_metadata %>% filter(Is_VIP) %>% mutate(Clean_Species = gsub("\\[|\\]", "", word(organism_name, 1, 2)))
     TOTAL_REF_SPECIES <- n_distinct(ref_meta$Clean_Species); if(TOTAL_REF_SPECIES==0) TOTAL_REF_SPECIES <- 1
     scores <- data.frame()
-    full_aln_path <- file.path(OUT_DIR, "Alignment_Full_Extracted_16S.fasta")
+    full_aln_path <- file.path(dir_alignments, "Alignment_Full_Extracted_16S.fasta")
     full_seqs <- if(file.exists(full_aln_path)) readDNAStringSet(full_aln_path) else NULL
     
     for(f in files) {
@@ -674,24 +700,397 @@ run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobaci
       p_strict <- ggplot(scores, aes(x=reorder(Plot_Label, Percent_Resolved), y=Percent_Resolved, fill=Bar_Color)) +
         geom_bar(stat="identity", color="black", width=0.7) + geom_text(aes(label=Count_Label), hjust=-0.2, size=3.5, fontface="bold") + scale_fill_manual(values = c("Baseline" = "#e67e22", "Primer" = "#3498db")) + coord_flip() + scale_y_continuous(limits = c(0, 115), breaks = seq(0, 100, 25)) +
         labs(title=paste("Resolution (Reference Strains Only) -", target_genus), subtitle="Excludes conflicts caused by database noise/draft genomes", x="Primer Set", y="Resolution %") + theme_bw() + theme(legend.position = "none", axis.text.y = element_text(size=9))
-      pdf(file.path(OUT_DIR, "Strict_Resolution_Comparison_RefOnly.pdf"), width=12, height=10); print(p_strict); dev.off()
+      pdf(file.path(dir_results, "Strict_Resolution_Comparison_RefOnly.pdf"), width=12, height=10); print(p_strict); dev.off()
       
       genus_log <- data.frame(Genus = target_genus, stringsAsFactors = FALSE)
       for (i in 1:nrow(scores)) genus_log[[scores$Primer_Set[i]]] <- ifelse(scores$Percent_Resolved[i] == 100, "Yes", "No") 
       master_resolution_log[[target_genus]] <- genus_log
     }
+
+    # ==============================================================================
+    # --- Phase 10: Higher Taxonomic Resolution (The Scout & Swarm) ---
+    # ==============================================================================
+    tax_levels_ordered <- c("Genus", "Family", "Order", "Class", "Phylum")
+    target_idx <- which(tax_levels_ordered == "Genus")
+    max_idx <- which(tax_levels_ordered == max_tax_level)
+    
+    if (length(max_idx) == 1 && max_idx > target_idx) {
+      current_idx <- target_idx + 1
+      
+     while(current_idx <= max_idx) {
+        current_tax_level <- tax_levels_ordered[current_idx]
+        
+        # Safely pull the name of the current Family/Order/Class from our metadata
+        target_clade_name <- as.character(full_metadata[[current_tax_level]][1])
+        
+        # 1. First, check if the clade actually exists!
+        if(is.na(target_clade_name)) {
+          message(paste("  -> [WARNING] NCBI did not provide a", current_tax_level, "name for", target_genus, "- Aborting climb."))
+          break
+        }
+        
+        # 2. Only create the subfolders if we didn't abort
+        lvl_align_dir <- file.path(dir_alignments, current_tax_level)
+        lvl_tree_dir  <- file.path(dir_trees, current_tax_level)
+        
+        if(!dir.exists(lvl_align_dir)) dir.create(lvl_align_dir)
+        if(!dir.exists(lvl_tree_dir)) dir.create(lvl_tree_dir)
+        
+        message(paste("\n--- Upgrading to", current_tax_level, "Level:", target_clade_name, "---"))
+        
+        # ---------------------------------------------------------
+        # --- PHASE 1 of higher taxonomic look: DYNAMIC SCOUT SWEEP ---
+        # ---------------------------------------------------------
+        message(paste("  -> Initiating Scout Sweep for", current_tax_level, ":", target_clade_name))
+        
+        # 1. Ping NCBI for every Genus inside this specific Clade
+        query <- paste0(target_clade_name, "[Subtree] AND genus[Rank]")
+        search_res <- tryCatch(rentrez::entrez_search(db="taxonomy", term=query, retmax=5000), error=function(e) NULL)
+        
+        outgroup_genera <- c()
+        if(!is.null(search_res) && length(search_res$ids) > 0) {
+          tax_xml <- tryCatch(rentrez::entrez_fetch(db="taxonomy", id=search_res$ids, rettype="xml"), error=function(e) NULL)
+          if(!is.null(tax_xml)) {
+            xml_doc <- xml2::read_xml(tax_xml)
+            outgroup_genera <- xml2::xml_text(xml2::xml_find_all(xml_doc, "//ScientificName"))
+            outgroup_genera <- outgroup_genera[outgroup_genera != target_genus]
+          }
+        }
+        
+        if(length(outgroup_genera) == 0) {
+          message(paste("  -> [WARNING] No outgroup genera found for", target_clade_name, "- Aborting climb."))
+          break
+        }
+        
+        # 2. Filter the Master NCBI table first to see who actually has valid genomes
+        scout_meta <- master_meta %>%
+          # Add Check_Name so we can cross-reference LPSN exactly
+          mutate(
+            Temp_Genus = gsub("\\[|\\]", "", stringr::word(organism_name, 1)),
+            Check_Name = gsub("\\[|\\]", "", stringr::word(organism_name, 1, 2))
+          ) %>%
+          filter(Temp_Genus %in% outgroup_genera) %>%
+          filter(refseq_category %in% c("reference genome", "representative genome")) %>%
+          filter(!grepl(" sp\\.| sp$|Candidatus|uncultured", organism_name, ignore.case=TRUE)) %>%
+          filter(contig_count <= max_contigs)
+          
+        # LPSN Filter for Higher Taxa
+        if(enable_lpsn_check && !is.null(master_lpsn_clean)) {
+           scout_meta <- scout_meta %>% filter(Check_Name %in% master_lpsn_clean$Full_Name)
+        }
+        
+        # Now safely group and grab the single best representative
+        scout_meta <- scout_meta %>%
+          group_by(Temp_Genus) %>%
+          arrange(desc(assembly_level == "Complete Genome"), seq_rel_date) %>%
+          dplyr::slice(1) %>%  
+          ungroup()
+          
+        # 3. Apply User-Defined Limit AFTER confirming they have genomes
+        if(!is.infinite(max_scout_genera) && nrow(scout_meta) > max_scout_genera) {
+          set.seed(42) # Ensures reproducibility between runs
+          scout_meta <- scout_meta %>% dplyr::sample_n(max_scout_genera)
+          message(paste("  -> [NOTE] Scout sweep capped at", max_scout_genera, "valid genera out of", length(outgroup_genera), "taxonomy nodes."))
+        } else {
+          message(paste("  -> [NOTE] Uncapped sweep: Targeting all", nrow(scout_meta), "valid genera found in clade."))
+        }
+        
+        message(paste("  -> Found", nrow(scout_meta), "representative outgroup genomes for", target_clade_name))
+        
+        # HELPER FUNCTION: Download & Extract 16S for Outgroups (CACHED)
+        process_outgroups <- function(outgroup_meta, run_type_name) {
+          if(nrow(outgroup_meta) == 0) return(NULL)
+          
+          # 1. Clean Names
+          outgroup_meta <- outgroup_meta %>%
+            mutate(
+              Short_Name = stringr::word(organism_name, 1, 2),
+              Display_Name = paste(Short_Name, assembly_accession, sep="_"),
+              Display_Name = gsub("[^a-zA-Z0-9_\\.]", "_", Display_Name)
+            )
+          
+          # 2. Point to the Global Database Cache (Instead of the local OUT_DIR)
+          dir_cache <- file.path(db_dir, "Genome_Cache")
+          if(!dir.exists(dir_cache)) dir.create(dir_cache)
+          
+          # 3. Download Genomes & GFFs (Skips if already cached!)
+          outgroup_meta$local_path <- NA; outgroup_meta$local_gff <- NA
+          for(i in 1:nrow(outgroup_meta)) {
+            ftp_base <- outgroup_meta$ftp_path[i]
+            folder_name <- basename(ftp_base)
+            dest_genomic <- file.path(dir_cache, paste0(outgroup_meta$Display_Name[i], ".fna.gz"))
+            dest_gff <- file.path(dir_cache, paste0(outgroup_meta$Display_Name[i], ".gff.gz"))
+            
+            if(!file.exists(dest_genomic)) tryCatch({ curl::curl_download(paste0(ftp_base, "/", folder_name, "_genomic.fna.gz"), dest_genomic, quiet=TRUE) }, error=function(e) {})
+            if(!file.exists(dest_gff)) tryCatch({ curl::curl_download(paste0(ftp_base, "/", folder_name, "_genomic.gff.gz"), dest_gff, quiet=TRUE) }, error=function(e) {})
+            
+            if(file.exists(dest_genomic)) outgroup_meta$local_path[i] <- dest_genomic
+            if(file.exists(dest_gff)) outgroup_meta$local_gff[i] <- dest_gff
+          }
+          
+        # 4. Extract 16S
+          outgroup_seqs <- DNAStringSet()
+          for(i in 1:nrow(outgroup_meta)) {
+            if(!is.na(outgroup_meta$local_path[i]) && !is.na(outgroup_meta$local_gff[i])) {
+              res <- extract_16s_manual(outgroup_meta$local_path[i], outgroup_meta$local_gff[i], paste0("OUTGROUP_", outgroup_meta$Display_Name[i]))
+              
+              if(!is.null(res)) {
+                # Dereplicate sequences prior to moving on with analysis
+                unique_idx <- !duplicated(as.character(res))
+                res <- res[unique_idx]
+
+                
+                outgroup_seqs <- c(outgroup_seqs, res)
+              }
+            }
+          }
+          
+          # Note: We completely removed the `unlink()` deletion command so the cache persists!
+          if(length(outgroup_seqs) == 0) return(NULL)
+          return(outgroup_seqs)
+        }
+
+        # 3. Execute Scout Extraction
+        scout_seqs <- process_outgroups(scout_meta, "Scout")
+        
+        if(is.null(scout_seqs)) {
+          message("  -> [WARNING] Failed to extract 16S from Scout outgroups. Aborting climb.")
+          break
+        }
+        
+        # 4. Build the Scout Tree
+        # Combine the target genus amplicons with the new outgroup amplicons
+        combined_scout_seqs <- c(general_16s, scout_seqs)
+        scout_aln <- smart_align(combined_scout_seqs, mafft_exec = mafft_path)
+        
+        # Calculate the tree
+        scout_dist <- DistanceMatrix(scout_aln, verbose=FALSE)
+        scout_tree <- njs(scout_dist)
+
+        # Save the Scout Alignment and Tree (Updated Paths)
+        message("  -> Saving Scout Alignment and Tree...")
+        writeXStringSet(scout_aln, file.path(lvl_align_dir, paste0("Alignment_Scout_", current_tax_level, "_", target_genus, ".fasta")))
+        
+        pdf(file.path(lvl_tree_dir, paste0("Tree_Scout_", current_tax_level, "_", target_genus, ".pdf")), width=15, height=max(10, length(scout_tree$tip.label)*0.2))
+        p_scout <- ggtree(scout_tree) + geom_tiplab(size=2) + theme_tree2() + 
+          labs(title=paste("Scout Tree:", target_genus, "within", current_tax_level, target_clade_name)) + hexpand(0.5)
+        print(p_scout)
+        dev.off()
+
+        # ---------------------------------------------------------
+        # --- PHASE 2: THREAT DETECTION ---
+        # ---------------------------------------------------------
+        message("  -> Calculating Cophenetic distances to identify nearest threats...")
+        
+        # 1. Generate the absolute distance matrix from the tree
+        dist_matrix <- ape::cophenetic.phylo(scout_tree)
+        
+        # 2. Separate Target tips from Outgroup tips
+        target_tips <- scout_tree$tip.label[!grepl("OUTGROUP_", scout_tree$tip.label)]
+        outgroup_tips <- scout_tree$tip.label[grepl("OUTGROUP_", scout_tree$tip.label)]
+        
+        # SAFEGUARD: Ensure we have both targets and outgroups before mathing
+        if(length(target_tips) == 0 || length(outgroup_tips) == 0) {
+           message("  -> [WARNING] Missing tips in scout tree. Aborting climb.")
+           break
+        }
+        
+        # 3. Calculate the average distance from the Target clade to each specific Outgroup tip
+        target_distances <- dist_matrix[target_tips, outgroup_tips, drop=FALSE]
+        avg_distances <- colMeans(target_distances)
+        
+        # 4. Map the tips back to their Genera and find the closest threats
+        threat_df <- data.frame(
+          Tip_Name = names(avg_distances),
+          Distance = avg_distances,
+          stringsAsFactors = FALSE
+        ) %>%
+          # Extract the Genus name by splitting at the first underscore!
+          mutate(Threat_Genus = stringr::word(gsub("OUTGROUP_", "", Tip_Name), 1, sep="_")) %>%
+          group_by(Threat_Genus) %>%
+          summarize(Mean_Distance = mean(Distance)) %>%
+          arrange(Mean_Distance)
+        
+        # Save the decision log so users can verify why these threats were chosen
+        write.csv(threat_df, file.path(dir_logs, paste0(current_tax_level, "_", target_genus, "_Cophenetic_Threats.csv")), row.names=FALSE)
+        
+        # 5. Lock in the targets for Phase 3 (The Swarm)
+        # We use min() to prevent crashing if n_threats is larger than the available outgroups
+        actual_threats_to_pull <- min(n_threats, nrow(threat_df))
+        top_threats <- head(threat_df$Threat_Genus, actual_threats_to_pull)
+        message(paste("  -> Top threats identified:", paste(top_threats, collapse=", ")))
+        
+        # DEBUG LINE
+        message(paste("  -> DEBUG: Inspecting exact threat names to be fetched:", paste(paste0("'", top_threats, "'"), collapse=", ")))
+
+    
+        # ---------------------------------------------------------
+        # --- PHASE 3: THE SWARM (DEEP FETCH) ---
+        # ---------------------------------------------------------
+        message(paste("  -> Initiating Swarm Fetch for top", actual_threats_to_pull, "threats..."))
+        
+        swarm_meta <- master_meta %>%
+          mutate(
+            Temp_Genus = gsub("\\[|\\]", "", stringr::word(organism_name, 1)),
+            Temp_Species = stringr::word(organism_name, 1, 2),
+            Check_Name = gsub("\\[|\\]", "", stringr::word(organism_name, 1, 2))
+          ) %>%
+          filter(Temp_Genus %in% top_threats) %>%
+          filter(refseq_category %in% c("reference genome", "representative genome")) %>%
+          filter(!grepl(" sp\\.| sp$|Candidatus|uncultured", organism_name, ignore.case=TRUE)) %>%
+          filter(contig_count <= max_contigs)
+
+        # LPSN Filter for Threat Swarm
+        if(enable_lpsn_check && !is.null(master_lpsn_clean)) {
+           swarm_meta <- swarm_meta %>% filter(Check_Name %in% master_lpsn_clean$Full_Name)
+        }
+
+        swarm_meta <- swarm_meta %>%
+          group_by(Temp_Species) %>%
+          arrange(desc(assembly_level == "Complete Genome"), seq_rel_date) %>%
+          dplyr::slice(1) %>%
+          ungroup()
+          
+        message(paste("  -> Downloading", nrow(swarm_meta), "threat species genomes..."))
+        
+        # Use our trusty helper function again!
+        swarm_seqs <- process_outgroups(swarm_meta, "Swarm")
+        
+        if(is.null(swarm_seqs)) {
+          message("  -> [WARNING] Failed to extract 16S from Swarm outgroups. Aborting climb.")
+          break
+        }
+        
+        # Combine target genus + full threat swarm
+        combined_swarm_seqs <- c(general_16s, swarm_seqs)
+        swarm_aln <- smart_align(combined_swarm_seqs, mafft_exec = mafft_path)
+
+        # Save the Swarm Alignment
+        message("  -> Saving Swarm Alignment...")
+        writeXStringSet(swarm_aln, file.path(dir_alignments, paste0("Alignment_Swarm_", current_tax_level, "_", target_genus, ".fasta")))
+
+        swarm_tree <- njs(DistanceMatrix(swarm_aln, verbose=FALSE))
+
+        # --- NEW: Save the Swarm Alignment and Tree (Updated Paths) ---
+        message("  -> Saving Swarm Alignment...")
+        writeXStringSet(swarm_aln, file.path(lvl_align_dir, paste0("Alignment_Swarm_", current_tax_level, "_", target_genus, ".fasta")))
+        
+        swarm_tree <- njs(DistanceMatrix(swarm_aln, verbose=FALSE))
+        
+        pdf(file.path(lvl_tree_dir, paste0("Tree_Swarm_", current_tax_level, "_", target_genus, ".pdf")), width=15, height=max(10, length(swarm_tree$tip.label)*0.2))
+        p_swarm <- ggtree(swarm_tree) + geom_tiplab(size=2) + theme_tree2() + labs(title=paste("Swarm Tree:", target_genus, "vs Top Threats at", current_tax_level, "Level")) + hexpand(0.5)
+        print(p_swarm)
+        dev.off()
+
+        # ---------------------------------------------------------
+        # --- PHASE 4: THE MULTI-PRIMER MONOPHYLY TEST ---
+        # ---------------------------------------------------------
+        message(paste("  -> Testing Clade Exclusivity (Monophyly) at", current_tax_level, "Level for all primers..."))
+        
+        # 1. Evaluate the Baseline (Full 16S)
+        target_tips_final <- swarm_tree$tip.label[!grepl("OUTGROUP_", swarm_tree$tip.label)]
+        is_exclusive_full <- ape::is.monophyletic(swarm_tree, target_tips_final)
+        
+        level_log <- data.frame(
+          Primer_Set = "Full_Extracted_16S",
+          Status = ifelse(is_exclusive_full, "Resolved", "Polyphyletic (Failed)"),
+          stringsAsFactors = FALSE
+        )
+        
+        # 2. Loop through all requested Primer Sets
+        for (region_name in names(primer_sets)) {
+          p_info <- primer_sets[[region_name]]
+          fwd_primer <- DNAString(p_info$Fwd); rev_primer <- DNAString(p_info$Rev)
+          
+          current_amplicons <- DNAStringSet()
+          
+          # Perform in-silico PCR on the entire swarm!
+          for(i in seq_along(combined_swarm_seqs)) {
+             subj <- RemoveGaps(combined_swarm_seqs[i])[[1]]; subj_rc <- reverseComplement(subj)
+             run_pcr <- function(s) matchLRPatterns(fwd_primer, reverseComplement(rev_primer), s, max.gaplength=p_info$Max, max.Lmismatch=4, max.Rmismatch=4, with.Lindels=TRUE, Lfixed=FALSE, Rfixed=FALSE)
+             
+             v1 <- run_pcr(subj); v2 <- run_pcr(subj_rc); hit <- NULL
+             if(length(v1)>0) { hit <- v1[which.max(width(v1))] } else if(length(v2)>0) { hit <- v2[which.max(width(v2))] }
+             
+             if(!is.null(hit)) {
+               amp <- as(hit, "DNAStringSet")[[1]]
+               if(length(amp) >= p_info$Min && length(amp) <= p_info$Max) {
+                 current_amplicons <- c(current_amplicons, DNAStringSet(amp))
+                 names(current_amplicons)[length(current_amplicons)] <- names(combined_swarm_seqs)[i]
+               }
+             }
+          }
+          
+          # Check if the PCR successfully captured both targets and outgroups
+          has_targets <- any(!grepl("OUTGROUP_", names(current_amplicons)))
+          has_outgroups <- any(grepl("OUTGROUP_", names(current_amplicons)))
+          
+          # Check if the PCR successfully captured both targets and outgroups
+          if(length(current_amplicons) >= 3 && has_targets && has_outgroups) {
+             # Re-align the amplicons and build the V-region tree
+             amp_aln <- smart_align(current_amplicons, mafft_exec = mafft_path)
+             amp_tree <- njs(DistanceMatrix(amp_aln, verbose=FALSE))
+             
+             writeXStringSet(amp_aln, file.path(lvl_align_dir, paste0("Alignment_Swarm_", current_tax_level, "_", region_name, "_", target_genus, ".fasta")))
+             
+             pdf(file.path(lvl_tree_dir, paste0("Tree_Swarm_", current_tax_level, "_", region_name, "_", target_genus, ".pdf")), width=15, height=max(10, length(amp_tree$tip.label)*0.2))
+             p_amp <- ggtree(amp_tree) + geom_tiplab(size=2) + theme_tree2() + labs(title=paste(region_name, "Swarm Tree:", target_genus, "at", current_tax_level, "Level")) + hexpand(0.5)
+             print(p_amp)
+             dev.off()
+             
+             t_tips <- amp_tree$tip.label[!grepl("OUTGROUP_", amp_tree$tip.label)]
+             
+             if(length(t_tips) > 0) {
+                is_exc <- ape::is.monophyletic(amp_tree, t_tips)
+                level_log <- rbind(level_log, data.frame(Primer_Set = region_name, Status = ifelse(is_exc, "Resolved", "Polyphyletic (Failed)")))
+             } else {
+                level_log <- rbind(level_log, data.frame(Primer_Set = region_name, Status = "PCR_Failure (Target Genus Dropped)"))
+             }
+          } else {
+             level_log <- rbind(level_log, data.frame(Primer_Set = region_name, Status = "PCR_Failure (Missing Comparison Groups)"))
+          }
+        }
+        
+        # 3. Format and export the Level-Specific Resolution Log
+        level_log$Target_Genus <- target_genus
+        level_log$Taxonomic_Level <- current_tax_level
+        level_log$Clade_Name <- target_clade_name
+        level_log$Threats_Tested <- paste(top_threats, collapse=" | ")
+        
+        level_log <- level_log %>% relocate(Target_Genus, Taxonomic_Level, Clade_Name, Primer_Set, Status, Threats_Tested)
+        
+        write.csv(level_log, file.path(dir_results, paste0("Monophyly_Log_", current_tax_level, "_", target_genus, ".csv")), row.names=FALSE)
+        
+        master_higher_taxa_log[[length(master_higher_taxa_log) + 1]] <- level_log
+
+        # Advance the loop to the next taxonomic tier!
+        current_idx <- current_idx + 1
+      }
+    }
+
     # --- Space Saver Cleanup ---
     if(!keep_genomes) {
       message("  -> Space Saver Enabled: Deleting downloaded .fasta and .gff files...")
-      unlink(genome_folder, recursive = TRUE)
-      unlink(annot_folder, recursive = TRUE)
+      unlink(dir_genomes, recursive = TRUE)
+      unlink(dir_annots, recursive = TRUE)
     }
     
     message(paste(">>> ANALYSIS COMPLETE FOR:", target_genus, "<<<"))
-  } # <-- This is the bracket that closes the main batch loop
+    
+  } # <--- Bracket 1: This closes the main 'for (target_genus in target_genera)' LOOP
   
+  
+  # This block must remain inside the function!
   if (length(master_resolution_log) > 0) {
     write.csv(dplyr::bind_rows(master_resolution_log), file.path(output_dir, "Master_Resolution_Summary.csv"), row.names = FALSE)
     message(paste(">>> PIPELINE COMPLETE. Master summary saved to:", file.path(output_dir, "Master_Resolution_Summary.csv")))
-  } else message(">>> PIPELINE COMPLETE. No resolution data was generated.")
-}
+  } else {
+    message(">>> PIPELINE COMPLETE. No resolution data was generated.")
+  }
+
+  if (length(master_higher_taxa_log) > 0) {
+    write.csv(dplyr::bind_rows(master_higher_taxa_log), file.path(output_dir, "Master_Higher_Taxa_Summary.csv"), row.names = FALSE)
+    message(paste(">>> PIPELINE COMPLETE. Higher Taxa summary saved to:", file.path(output_dir, "Master_Higher_Taxa_Summary.csv")))
+  }
+
+} # <--- Bracket 2: This is the FINAL bracket that closes 'run_16s_pipeline <- function(...) {'

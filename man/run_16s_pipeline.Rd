@@ -7,6 +7,7 @@
 run_16s_pipeline(
   target_genera = c("Commensalibacter", "Apilactobacillus"),
   output_dir = ".",
+  db_dir = ".",
   mafft_path = "mafft",
   custom_primers = NULL,
   only_reference = TRUE,
@@ -16,6 +17,9 @@ run_16s_pipeline(
   lpsn_db_path = "lpsn_gss.csv",
   max_contigs = 100,
   refseq_max_age = 30,
+  max_tax_level = "Genus",
+  n_threats = 2,
+  max_scout_genera = 50,
   keep_genomes = TRUE
 )
 }
@@ -23,6 +27,8 @@ run_16s_pipeline(
 \item{target_genera}{A character vector of genera to analyze (e.g., c("Gilliamella", "Snodgrassella")) or input a .csv file with a list of genera and all will be processed with a log file to summarize resolution of primers for each genus.}
 
 \item{output_dir}{String. Path to the folder where results should be saved. Defaults to current working directory. Each genera targeted generates a new folder in the output directory with all output files}
+
+\item{db_dir}{String. Path to the directory where master databases (NCBI summary, LPSN) are stored. Defaults to current working directory. Setting this to a static folder saves your laptop's bandwidth by preventing the pipeline from re-downloading the databases for every new output directory.}
 
 \item{mafft_path}{String. Path to MAFFT executable (default: "mafft"). If MAFFT is not found, the pipeline automatically falls back to DECIPHER. Set to "" to intentionally force DECIPHER and bypass the MAFFT system check.}
 
@@ -42,7 +48,13 @@ run_16s_pipeline(
 
 \item{refseq_max_age}{Numeric. Maximum age (in days) of the local RefSeq summary file before a new one is downloaded. Set to Inf to always use the local file if it exists, or 0 to force a fresh download. Default is 30.}
 
-\item{keep_genomes}{Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space.}
+\item{max_tax_level}{String. The highest taxonomic level to assess for clade resolution (e.g., "Genus", "Family", "Order", "Class", "Phylum"). Computation resources and time increase dramatically with increase taxa levels.}
+
+\item{n_threats}{Numeric. The number of closest outgroup genera to pull full species data and align. Defaults to 2.}
+
+\item{max_scout_genera}{Numeric. Maximum number of outgroup genera to fetch during the phylogenetic scout phase. Defaults to 50. Set to Inf for unlimited. A setting to tune as needed based on time and computational resources.}
+
+\item{keep_genomes}{Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space. Unless you have a lot of extra space FALSE is recommended when going above the genus level.}
 }
 \value{
 Generates output folders containing alignments, trees, mismatch reports, and resolution plots.
