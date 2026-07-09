@@ -1,101 +1,161 @@
-# rResolution16S
-A Comprehensive 16S rRNA Gene Taxonomic Resolution Pipeline
+# MarkerCompass
 
-rResolution16S is an automated R package designed to evaluate and optimize 16S rRNA gene primer selection for specific bacterial genera and determine the level of taxonomic resolution provided by a primer set for a given genera. By extracting full-length 16S rRNA sequences from high-quality NCBI RefSeq genomes and simulating in silico PCR across hypervariable regions, this pipeline generates empirical metrics on primer mismatch, phylogenetic resolution, and sequence entropy.
+**MarkerCompass:** An R framework for benchmarking marker genes and primer sets for taxonomic resolution.
 
-The Rationale: Why rResolution16S?
-The 16S ribosomal RNA (rRNA) gene is the gold standard for bacterial taxonomic classification. However, next-generation sequencing (NGS) platforms typically rely on short-read amplicons spanning only one or two hypervariable regions (e.g., V3-V4, V4) rather than the full ~1,500 base pair gene (Bukin et al., 2019).
+`MarkerCompass` is a comprehensive, end-to-end R pipeline designed to evaluate the taxonomic and clade-level resolution of *in-silico* PCR primer sets. The tool automatically downloads target genomes from NCBI based on a list of genera, filters and dereplicates strains, parses `.gff` coordinates to isolate specific loci, runs an *in-silico* PCR extraction with an adaptive IUPAC-aware string matcher, and outputs publication-ready phylogenetic resolution metrics, trees, and high-fidelity primer mismatch reports.
 
-Relying on universal short-read amplicons presents two major challenges in microbiome research:
+---
 
-Variable Taxonomic Resolution: The phylogenetic signal of a specific hypervariable region is highly genus-dependent. A region that perfectly resolves species within one genus may completely fail to distinguish species in another (Johnson et al., 2019).
+## 🧠 The Rationale: Why MarkerCompass?
 
-Primer Bias: "Universal" primers often contain mismatches against specific clades, leading to amplification bias, underrepresentation, or complete dropout of key taxa in metabarcoding datasets (Klindworth et al., 2013; Parada et al., 2016).
+Targeted amplicon sequencing using marker genes (e.g., 16S rRNA, *rpoB*, *groL*, ITS) remains the gold standard for microbial taxonomic classification. However, high-throughput next-generation sequencing (NGS) platforms typically rely on short-read amplicons spanning only a fraction of the full-length gene (Bukin et al., 2019). 
 
-rResolution16S solves this by taking a targeted, data-driven approach. Before beginning library preparation or sequencing, researchers can use this package to objectively determine which primer set yields the highest species-level resolution for their specific taxa of interest, while quantifying and avoiding critical primer mismatches. Alternatively, with metabarcoded datasets, the genus level taxonomy can be fed into rResolution16S in order to determine which taxa can be confidently classified to the species level and which cannot.
+Relying on "universal" short-read amplicons presents two major challenges in microbiome and evolutionary research:
 
-![Pipeline Methodology](man/figures/flowchart_4_rResolution16S.png)
+1. **Variable Taxonomic Resolution:** The phylogenetic signal of a specific amplicon is highly lineage-dependent. A marker gene or sub-region that provides perfect species-level resolution for one taxonomic group may completely fail to differentiate closely related species in another (Johnson et al., 2019).
+2. **Primer Bias & Clade Dropout:** "Universal" primers frequently contain sequence mismatches against specific clades. This leads to severe amplification bias, underrepresentation, or the complete dropout of key taxa in metabarcoding datasets (Klindworth et al., 2013; Parada et al., 2016).
 
-The run_16s_pipeline() function executes a completely automated, multi-phase workflow:
+`MarkerCompass` solves these challenges by taking a targeted, data-driven approach. Before beginning costly library preparations or sequencing runs, researchers can use this framework to objectively determine which marker gene and primer set will yield the highest taxonomic resolution for their specific clades of interest, while quantifying and avoiding critical primer mismatches. 
 
-Data Acquisition from NCBI -
-The pipeline interfaces with the NCBI RefSeq database, downloading only complete genomes, chromosomes, and high-quality scaffolds for the targeted genera. RefSeq is prioritized to ensure that the baseline sequences are expertly curated and highly reliable (O'Leary et al., 2016).
+Alternatively, for already-sequenced metabarcoding datasets, researchers can feed their genus-level taxonomy back into `MarkerCompass` to definitively validate which taxa can be confidently classified down to the species level based on the utilized primer set, and which cannot.
 
-Nomenclature Validation (LPSN) *optional -
-Bacterial taxonomy is subject to frequent revisions. The pipeline integrates with the List of Prokaryotic names with Standing in Nomenclature (LPSN) to cross-reference genome identities. Genomes with synonymous, outdated, or "not validly published" names are flagged and/or filtered to ensure downstream phylogenetic trees reflect current taxonomic consensus (Parte et al., 2020).
+---
 
-Full-Length 16S Extraction & Dereplication -
-Using the .gff genomic coordinate files, the package extracts all copies of the 16S rRNA gene from the downloaded genomes (.fasta files). Because bacteria frequently possess multiple, polymorphic copies of the 16S rRNA operon (Vetrovsky & Baldrian, 2013), the sequences are subsequently dereplicated to unique sequence hashes, preventing artificial over-representation in the alignments.
+## 📥 Installation
 
-In Silico PCR & IUPAC Mismatch Logging -
-Extracted sequences are aligned using MAFFT (Katoh & Standley, 2013) if a path is provided, but will default to DECIPHER (Wright, 2015). The package then simulates PCR amplification using standard primer sets (e.g., EMP V4, Klindworth V3-V4), or custom primer sets if provided. It utilizes the Biostrings package to perform character-by-character IUPAC-aware mismatch mapping, generating a detailed visual report of primer binding efficacy and identifying mismatched bases. A passing in silico PCR does not mean it will work in vivo; the package is set up to always perform the in silico PCR to obtain the resolution of the chosen genera, and the primer mismatch report should always be examined to determine if a primer is likely to work in vivo.
+You can install the development version of `MarkerCompass` directly from GitHub using the `remotes` package. All required CRAN and Bioconductor dependencies will be installed automatically.
 
-Phylogenetic Resolution & Entropy Mapping -
-Extracted amplicons are converted into distance matrices to calculate the percentage of reference species perfectly resolved by each hypervariable region. Outputs include customized ggtree (Yu et al., 2017) phylogenetic visualizations, sequence entropy maps, and a simple primer resolution report providing visual confirmation of region suitability. A master summary file is also generated at the genera level to give a quick snapshot of the level of resolution for all genera inputed at the start of a run for each primer pair.
-
-## Installation via GitHub
-```r
-#Install the remotes package if not already present
+```R
+# Install the remotes package if not already present
 if (!requireNamespace("remotes", quietly = TRUE)) {
   install.packages("remotes")
 }
 
-#Install rResolution16S 
-remotes::install_github("dybrettin/rResolution16S", quiet = TRUE)
-```
-(Note: Ensure MAFFT is installed on your system and accessible via your system PATH, though the package will fall back to DECIPHER if MAFFT is unavailable).
-
-Quick Start Guide
-Load the package and run the pipeline on a genus of interest. The function generates a robust folder structure containing all metadata, alignments, trees, and mismatch reports.
-
-Because `rResolution16S` relies on powerful data manipulation and bioinformatics libraries, loading it standardly will print several warnings about masked dependency objects. To load the package silently, use `suppressPackageStartupMessages()`:
-
-```r
-
-# Load the package
-library(rResolution16S)
-
-# Overview of standard options
-run_16s_pipeline(
-    target_genera = c("Genus1", "Genus2", "Genus3"), 
-    output_dir = ".",
-    mafft_path = "FILE_PATH_TO/mafft.bat",
-    custom_primers = NULL,
-    only_reference = TRUE,
-    dereplicate_strains = TRUE,
-    remove_unclassified = TRUE,
-    enable_lpsn_check = TRUE,
-    lpsn_db_path = "FILE_PATH_TO/lpsn_gss_2026-02-10.csv",
-    max_contigs = 100,
-    refseq_max_age = 30,
-    keep_genomes = TRUE)
+# Install MarkerCompass
+remotes::install_github("dybrettin/MarkerCompass", quiet = TRUE)
 ```
 
-### Parameter Explanations
+*(Note: For optimal alignment speed, ensure MAFFT is installed on your system and accessible via your system PATH. The package will automatically fall back to the native `DECIPHER` alignment engine if MAFFT is unavailable).*
 
-target_genera: Genera you wish to analyze (e.g., c("Bifidobacterium", "Snodgrassella")) or input a .csv file (target_genera = c("PATH_TO_FILE/genus_list_example.csv")) with a list of genera. See examples folder on GitHub for .csv input format 'genus_list_example.csv'.
+---
 
-output_dir: Path to the folder where results should be saved. Defaults to current working directory (working directory is where NCBI refseq_assembly_summary.txt is downloaded and where Master_Resolution_Summary.csv is generated). Each genera targeted generates a new folder in the output directory with all genus specific output files.
+## 🚀 Quick Start & Usage Guide
 
-mafft_path: Path to MAFFT executable (default: "mafft"). If MAFFT is not found, the pipeline automatically falls back to DECIPHER. Set to "" to intentionally force DECIPHER and bypass the MAFFT system check.
+Once installed, running the pipeline requires only a single function call: `run_marker_pipeline()`.
 
-custom_primers: Optional. Path to a CSV file or an R list containing custom primer sets. See examples folder on GitHub for .csv input format 'primer_list_example.csv'
+Here is a basic usage example targeting the 16S rRNA gene for two specific genera. By default, this will run the built-in library of universal 16S primers.
 
-only_reference: If TRUE, only uses RefSeq/Representative genomes. Some RefSeq/Representative genomes are not validly published according to LPSN, so enable that setting as well if wanting only validly published reference species. TRUE is recommended as many genera have a lot of poor quality genomes (sometimes even the reference genomes are bad unfortunately).
+```R
+library(MarkerCompass)
 
-dereplicate_strains: Keep only the best genome per strain (based on lower contig/scaffold count).
+run_marker_pipeline(
+  target_genera = c("Gilliamella", "Snodgrassella"),
+  output_dir = "MarkerCompass_Results",   # Where your output folders will be saved
+  db_dir = "Database_Files",              # Where NCBI/LPSN masters are cached
+  target_gene = "16S",                    # The gene to extract
+  feature_type = "rRNA",                  # The feature type to filter by in the GFF
+  enable_lpsn_check = TRUE,               # Validates against LPSN
+  lpsn_db_path = "Database_Files/lpsn_gss.csv"
+)
+```
 
-remove_unclassified: Remove unclassified strains like "sp." or "indicum".
+**Running Custom Primers:**
+If you are running a different marker gene (e.g., *groL*) or want to test your own primers, simply pass a `.csv` file to the `custom_primers` argument:
+```R
+run_marker_pipeline(
+  target_genera = "Neisseria",
+  target_gene = "groL",
+  feature_type = "gene",
+  custom_primers = "path/to/my_groL_primers.csv"
+)
+```
 
-enable_lpsn_check: Validate names against LPSN database.
+---
 
-lpsn_db_path: Path to the LPSN database CSV file. Can be downloaded at https://lpsn.dsmz.de/downloads
+## 🗺️ Pipeline Workflow
 
-max_contigs: Maximum allowed contigs/scaffolds for draft genomes. RefSeq representative genomes are always kept regardless of contig/scaffold #.
+```mermaid
+graph TD
+    A[Input: Target Genera, Marker Gene, & Primers] --> B[Fetch NCBI RefSeq Summary]
 
-refseq_max_age: Maximum age (in days) of the local RefSeq summary file before a new one is downloaded. Set to Inf to always use the local file if it exists, or 0 to force a fresh download. Default is 30.
+    %% Gatekeeping
+    B --> C{enable_lpsn_check?}
+    C -- TRUE --> D{LPSN Name Valid?}
+    D -- No --> E[Drop Genome]
+    D -- Yes --> F[Approve for Download]
+    C -- FALSE --> F
 
-keep_genomes: If space is an issue set to FALSE to automatically delete .gff and .fasta folders after analysis is complete.
+    %% Extraction
+    F --> G[Download Data & Extract Locus via GFF Coordinates]
+    G -. keep_genomes = FALSE .-> H[Space Saver: Purge Raw Files]
+
+    %% Downstream
+    G --> I[Sequence Alignment & Outgroup Threat Scouting]
+
+    %% PCR
+    I --> J{Primers contain IUPAC codes?}
+    J -- Yes --> K[Smart Toggle: Strict Wildcard Match]
+    J -- No --> L[Smart Toggle: Indel Tolerant Match]
+
+    %% Final
+    K & L --> M[In-Silico PCR, Visual Mismatch Scoring, & Tree Building]
+    M --> N[(Deliverables: Trees, Mismatch Reports, & Resolution Summaries)]
+```
+
+---
+
+## ⚙️ Core Mechanics & Features
+
+* **Universal Marker Gene Targeting:** By adjusting the target gene and feature type parameters, you can extract and assess primers for any annotated gene in the NCBI database, not just 16S rRNA.
+* **"Smart Toggle" for Degenerate Primers:** Handling environmental primers with multiple `N`, `R`, `Y`, or `M` bases can be difficult due to how sequence mismatching handles insertions/deletions. The pipeline features a Smart Toggle that scans your input primers. If a primer consists entirely of standard bases (A, C, G, T), the script uses indel tolerance. If it detects *any* IUPAC ambiguity codes, it seamlessly switches to strict wildcard matching, preventing false-negative extraction failures on highly degenerate primers.
+* **Pre-Flight LPSN Gatekeeping:** Many genomes on NCBI feature outdated, synonymous, or invalidly published species names. The pipeline cross-references the LPSN (List of Prokaryotic names with Standing in Nomenclature) database *before* downloading genomes. Invalid species lose their reference status and are subjected to strict fragmentation checks or dropped entirely, saving bandwidth and preventing taxonomic confusion.
+* **High-Fidelity Mismatch Reporting:** The mismatch report generates a visual string alignment (e.g., `AT~~~~..~AA~..~.T~.A~TT~GG`) to help troubleshoot primer failures. Exact amplicon coordinate extraction prevents the aligner from clipping the edges of sequences, and true wildcard scoring ensures that degenerate bases that successfully match their target (e.g., an `N` matching an `A`) are visually scored with a tilde (`~`) rather than a hard mismatch.
+
+---
+
+## 🛠️ Configuration & Adjustable Parameters
+
+The `run_marker_pipeline()` function accepts a variety of parameters to fine-tune your analysis. They are grouped below by their functional role.
+
+### Input, Output & Infrastructure
+* **`target_genera`**: A character vector of target genera (e.g., `c("Gilliamella", "Snodgrassella")`) or a string path to a `.csv` file containing a list of genera to process sequentially.
+* **`custom_primers`**: Path to a `.csv` file containing custom primer pairs. If left as `NULL`, the script defaults to a built-in list of common 16S rRNA primer sets.
+* **`output_dir`**: Path to the folder where results should be saved. Each targeted genus generates a dedicated subfolder here. *(Default: `"."`)*
+* **`db_dir`**: Path to the directory where master databases (NCBI summary, LPSN) are stored. Setting this to a static folder prevents the pipeline from re-downloading massive databases for every new run. *(Default: `"."`)*
+* **`lpsn_db_path`**: Path to your local LPSN database CSV file. *(Default: `"lpsn_gss.csv"`)*
+* **`mafft_path`**: Path to your local MAFFT executable. If MAFFT is not found, the pipeline automatically falls back to the native R DECIPHER package. *(Default: `"mafft"`)*
+
+### Gene Targeting
+* **`target_gene`**: The specific gene text to search for in the `.gff` file. *(Default: `"16S"`)*
+* **`feature_type`**: The feature category to filter by (e.g., `"rRNA"`, `"CDS"`, `"gene"`). This is critical because a term like "16S" might appear in multiple feature types, but you generally only want the `"rRNA"` one. Set to `"ANY"` to bypass. *(Default: `"rRNA"`)*
+
+### Quality Control & Taxonomy
+* **`enable_lpsn_check`**: **(Highly Recommended)** Validates species names against the LPSN database to flag synonyms and invalidly published names. *(Default: `TRUE`)*
+* **`only_reference`**: Restricts the pipeline to only use RefSeq Reference or Representative genomes, filtering out lower-quality submissions. *(Default: `TRUE`)*
+* **`dereplicate_strains`**: Keeps only the highest-quality genome per strain label to prevent clonal overrepresentation in your alignments and trees. *(Default: `TRUE`)*
+* **`remove_unclassified`**: Automatically drops strains with ambiguous names like "sp.", "uncultured", or "Candidatus". *(Default: `TRUE`)*
+* **`max_contigs`**: The maximum allowed number of contigs for draft genomes. True RefSeq Reference genomes bypass this limit. *(Default: `100`)*
+* **`max_tax_level`**: The highest taxonomic tier to assess for clade resolution (e.g., `"Genus"`, `"Family"`, `"Order"`). *Warning: Higher levels require exponentially more compute time and bandwidth.* *(Default: `"Genus"`)*
+
+### Execution & Resource Management
+* **`n_threats`**: The number of closest outgroup genera to pull full species data for and align against your target. *(Default: `2`)*
+* **`max_scout_genera`**: The maximum number of outgroup genera to fetch during the phylogenetic scout phase. Set to `Inf` for unlimited. *(Default: `50`)*
+* **`refseq_max_age`**: Maximum age (in days) of your local RefSeq summary file before the script forces a fresh download from NCBI. Set to `Inf` to never redownload, or `0` to force a fresh download every time. *(Default: `30`)*
+* **`keep_genomes`**: If `FALSE`, operates as a "Space Saver" and immediately deletes the `.fna` and `.gff` files from your hard drive after extracting the amplicons. *(Default: `TRUE`)*
+
+---
+
+## 🧬 Custom Primer CSV Format
+
+If supplying your own primers via the `custom_primers` parameter, your `.csv` file must have the following exact headers:
+
+| Primer_Name | Fwd_Seq | Rev_Seq | Min_Length | Max_Length |
+| :--- | :--- | :--- | :--- | :--- |
+| rpoB_Universal | CARTTYATGGAYCANNNNNAAYCC | CNGCYTGDCKYTKCATRTTNNNNNCCCAT | 300 | 700 |
+| groL_H279 | GATNNNGCAGGNGATGGAACMACNAC | TGRTTNTCNCCAAAACCAGGNGCATT | 450 | 650 |
+
+> **Length Bounds Note:** The pipeline uses `Min_Length` and `Max_Length` filters to discard off-target or truncated fragments. Ensure your maximum limits are sized generously enough to contain unexpected natural biological insertions.
+
 
 ### Core Outputs
 
