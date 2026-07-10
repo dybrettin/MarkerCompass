@@ -9,6 +9,8 @@ run_16s_pipeline(
   output_dir = ".",
   db_dir = ".",
   mafft_path = "mafft",
+  target_gene = "16S",
+  feature_type = "rRNA",
   custom_primers = NULL,
   only_reference = TRUE,
   dereplicate_strains = TRUE,
@@ -19,7 +21,7 @@ run_16s_pipeline(
   refseq_max_age = 30,
   max_tax_level = "Genus",
   n_threats = 2,
-  max_scout_genera = 50,
+  max_scout_genera = Inf,
   keep_genomes = TRUE
 )
 }
@@ -32,6 +34,10 @@ run_16s_pipeline(
 
 \item{mafft_path}{String. Path to MAFFT executable (default: "mafft"). If MAFFT is not found, the pipeline automatically falls back to DECIPHER. Set to "" to intentionally force DECIPHER and bypass the MAFFT system check.}
 
+\item{target_gene}{String. The specific gene to extract from the GFF file (default: "16S"). RefSeq has a standardized annotation pipeline, so if having issues download a genomes GFF file and look through it to find the spelling for your gene of interest.}
+
+\item{feature_type}{String. The GFF feature category to filter by (e.g., "rRNA", "CDS", "gene"). Set to "ANY" to bypass this filter (default: "rRNA"). Multiple genes have 16S in the name, but only one rRNA has 16S in the name, so use this to limit your search to the correct catagory.}
+
 \item{custom_primers}{Optional. Path to a CSV file or an R list containing custom primer sets.}
 
 \item{only_reference}{Logical. If TRUE, only uses RefSeq/Representative genomes. Some RefSeq/Representative genomes are not validily published according to LPSN, so enable that setting as well if wanting only validly published reference species. TRUE is recommended as some genera have many poor quality genomes.}
@@ -40,7 +46,7 @@ run_16s_pipeline(
 
 \item{remove_unclassified}{Logical. Remove unclassified strains like "sp." or "indicum".}
 
-\item{enable_lpsn_check}{Logical. Validate names against LPSN database.}
+\item{enable_lpsn_check}{Logical. Validate names against LPSN database. HIGHLY RECOMMENDED* there are many synonym names in the refseq database which will give false negatives about a taxa being monophyletic}
 
 \item{lpsn_db_path}{String. Path to the LPSN database CSV file. Can be downloaded at https://lpsn.dsmz.de/downloads}
 
@@ -50,7 +56,7 @@ run_16s_pipeline(
 
 \item{max_tax_level}{String. The highest taxonomic level to assess for clade resolution (e.g., "Genus", "Family", "Order", "Class", "Phylum"). Computation resources and time increase dramatically with increase taxa levels.}
 
-\item{n_threats}{Numeric. The number of closest outgroup genera to pull full species data and align. Defaults to 2.}
+\item{n_threats}{Numeric. The number of closest outgroup genera to pull full species data and align. Defaults to 2. If wanting to look at all species in a Family or higher taxonomic level, set to Inf and make sure max_scout_genera is also set to Inf}
 
 \item{max_scout_genera}{Numeric. Maximum number of outgroup genera to fetch during the phylogenetic scout phase. Defaults to 50. Set to Inf for unlimited. A setting to tune as needed based on time and computational resources.}
 

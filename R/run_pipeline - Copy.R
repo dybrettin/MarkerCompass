@@ -38,7 +38,7 @@
 #' @importFrom forcats fct_relevel
 #' @return Generates output folders containing alignments, trees, mismatch reports, and resolution plots.
 #' @export
-run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobacillus"), 
+run_16s_pipeline <- function(target_genera = c("Commensalibacter", "Apilactobacillus"), 
                              output_dir = ".",
                              db_dir = ".",
                              mafft_path = "mafft",
