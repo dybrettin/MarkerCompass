@@ -156,82 +156,92 @@ If supplying your own primers via the `custom_primers` parameter, your `.csv` fi
 
 > **Length Bounds Note:** The pipeline uses `Min_Length` and `Max_Length` filters to discard off-target or truncated fragments. Ensure your maximum limits are sized generously enough to contain unexpected natural biological insertions.
 
+---
 
-### Core Outputs
+## 📊 Pipeline Outputs
 
-1. Master Resolution Summary
-Master_Resolution_Summary.csv: A high-level overview of which primer sets achieved 100% species resolution. Includes all genera included in a single run of the script.
+When a multi-genus pipeline run completes, `MarkerCompass` generates a centralized structure containing both run-wide master reports and genus-specific folders.
+
+### 🏆 Primary Outputs
+
+#### 1. Master Resolution Summary
+*   **`Master_Resolution_Summary.csv`**: A high-level, cross-genus overview compiling which primer sets achieved 100% species-level resolution. This maps all targeted genera processed in a single run into one clean table for quick comparison.
 ![Master Resolution Summary Example](man/figures/master_resolution_summary_example.png)
 
-3. Primer Mismatch Map
-primer_mismatch_report_summary.csv: A detailed, sequence-level visual map of primer alignments, highlighting critical mismatches (A, T, C, G), valid IUPAC flexibilities (~), and perfect matches (.).
-![Master Resolution Summary Example](man/figures/mismatch_report_example.png)
+#### 2. Comprehensive Phylogenies & Alignments
+*   **`Alignment_*.fasta` & `Tree_*.pdf`**: Multi-sequence alignments (built using MAFFT or DECIPHER) and their corresponding Neighbor-Joining phylogenetic trees, generated for both the full-length baseline gene and every successfully simulated amplicon.
+![Phylogeny Example](man/figures/v3v4_bifidobacterium_tree_example.png)
 
-4. Taxonomic Resolution Comparison
-Strict_Resolution_Comparison_RefOnly.pdf: A bar chart comparing the taxonomic resolution power of each tested hypervariable region against the full-length 16S baseline. Some strains on NCBI are poorly sequenced, but this output will inform you about how many failed in silico PCR and which primer it was (forward or reverse - forward is always primer with the lower V#). It will also mention under the extracted 16S if there was a sequence with no extractable and useable 16S rRNA gene region.
-![Master Resolution Summary Example](man/figures/primer_resolution_comparison_bombella_example.png)
+#### 3. High-Fidelity Primer Mismatch Map
+*   **`primer_mismatch_report_summary.csv`**: A granular, sequence-level visual map of primer alignments. It flags exact nucleotide mismatches (`A`, `T`, `C`, `G`), valid IUPAC degeneracy matches (`~`), and perfect sequence matches (`.`), enabling rapid troubleshooting of target sequence variations.
+![Mismatch Report Example](man/figures/mismatch_report_example.png)
 
-5. Phylogenies & Alignments
-Alignment_*.fasta & Tree_*.pdf: Multi-sequence alignments and corresponding phylogenetic trees for the full gene and every simulated amplicon.
-![Master Resolution Summary Example](man/figures/v3v4_bifidobacterium_tree_example.png)
+#### 4. Taxonomic Resolution Comparison
+*   **`Strict_Resolution_Comparison_RefOnly.pdf`**: A publication-ready bar chart comparing the taxonomic resolution power of each simulated amplicon region against the full-length baseline gene. Because some genomes in public databases are poorly sequenced or assembled, this report explicitly details which strains failed *in-silico* PCR, which primer caused the failure (Forward vs. Reverse), and flags strains that lacked an extractable or useable marker gene altogether.
+![Resolution Comparison Example](man/figures/primer_resolution_comparison_bombella_example.png)
 
-6. Sequence Entropy Mapping
-Entropy_Map_RefOnly/All.pdf: A visualization of the entropy of the 16S rRNA gene with primer amplicon regions shown for each primer pair.
-![Master Resolution Summary Example](man/figures/entropy_16S_bombella_example.png)
+#### 5. Sequence Entropy Mapping
+*   **`Entropy_Map_RefOnly/All.pdf`**: A visual map tracing position-by-position sequence entropy across the entire baseline marker gene, with specific primer-binding zones and amplicon coordinates overlaid to visually highlight conservation and hypervariability.
+![Entropy Map Example](man/figures/entropy_16S_bombella_example.png)
 
-### Secondary Outputs
+---
 
-extraction_status_report.csv: A table with information on the number of 16S rRNA genes extracted from each strain.
+### 📂 Secondary Logs & Asset Repositories
 
-QC_Contig_Report.csv: A table with the number of contigs per strain and a Yes/No column if it passed the quality control setting assigned.
+#### Audit & Quality Control Reports
+*   **`extraction_status_report.csv`**: A verification log cataloging the exact number of targeted marker loci successfully isolated from each individual strain.
+*   **`QC_Contig_Report.csv`**: An infrastructure quality control log detailing total contig counts per strain assembly, paired with an explicit `Yes/No` designation indicating if the assembly met your strict structural limits.
 
-annotations/: A folder containing .gff files for all downloaded genomes.
+#### Local Data Repositories
+*(Note: These asset folders are only retained if operating with `keep_genomes = TRUE`)*
+*   **`annotations/`**: Centralized storage subdirectory containing the raw `.gff` features fetched from NCBI for every parsed strain.
+*   **`genomes/`**: Centralized storage subdirectory containing the full `.fasta` genomic sequence files fetched during the execution run.
 
-genomes/: A folder containing all .fasta files for all downloaded genomes.
+---
 
-#### References
+## ⚙️ Under the Hood: Databases & Tooling
 
-Bukin, Y. S., Galachyants, Y. P., Morozov, I. V., Bukin, S. V., Zakharenko, A. S., & Zemskaya, T. I. (2019). The effect of 16S rRNA region choice on bacterial community metabarcoding results. Scientific Data, 6(1), 190007.
+To provide precise taxonomic resolution metrics and accurate phylogenetic tree placement, the framework connects several standard molecular databases with core computational libraries.
 
-Johnson, J. S., Spakowicz, D. J., Hong, B. Y., Petersen, L. M., Demircik, F., Cancio, C. C., ... & Weinstock, G. M. (2019). Evaluation of 16S rRNA gene sequencing for species and strain-level microbiome analysis. Nature Communications, 10(1), 5029.
+### Integrated Databases
+* **NCBI RefSeq & Taxonomy:** Assembly sequences (`.fna`) and features (`.gff`) are systematically pulled from the official NCBI FTP directory. Full taxonomic path lineages are dynamically constructed by querying the NCBI Taxonomy database.
+* **LPSN Database:** Cross-referencing names against the official **List of Prokaryotic names with Standing in Nomenclature** filters out taxonomic noise. 
+  * *Database download resource:* [https://lpsn.dsmz.de/downloads](https://lpsn.dsmz.de/downloads)
 
-Katoh, K., & Standley, D. M. (2013). MAFFT multiple sequence alignment software version 7: improvements in performance and usability. Molecular Biology and Evolution, 30(4), 772-780.
+### Computational Pipeline Engines
+* **In-Silico PCR (`Biostrings`):** PCR testing and sequence extraction loops utilize optimized `matchLRPatterns` calls to process ambiguities and indels cleanly, generating rapid, sequence-specific extractions.
+* **Multiple Sequence Alignment (`MAFFT` & `DECIPHER`):** To generate high-quality alignments rapidly, the script attempts an automated terminal hook into an accessible **MAFFT** path. If a local system binary is unconfigured or absent, alignment execution cleanly defaults to the native R-based `DECIPHER::AlignSeqs()` package.
+* **Phylogenetic Inferences (`ape` & `ggtree`):** Distance matrices are computed inside `DECIPHER` via a terminal index pass and subsequently processed into standard Neighbor-Joining trees (`njs`) by the `ape` package. Final tree topologies and clade data maps are rendered for export using `ggtree`.
 
-Klindworth, A., Pruesse, E., Schweer, T., Peplies, J., Quast, C., Horn, M., & Glöckner, F. O. (2013). Evaluation of general 16S ribosomal RNA gene PCR primers for classical and next-generation sequencing-based diversity studies. Nucleic Acids Research, 41(1), e1-e1.
+---
 
-O'Leary, N. A., Wright, M. W., Brister, J. R., Ciufo, S., Haddad, D., McVeigh, R., ... & Pruitt, K. D. (2016). Reference sequence (RefSeq) database at NCBI: current status, taxonomic expansion, and functional annotation. Nucleic Acids Research, 44(D1), D733-D745.
+## 📚 Software,Tool & Rational References
 
-Pagès, H., Aboyoun, P., Gentleman, R., & DebRoy, S. (2024). Biostrings: Efficient manipulation of biological strings. R package version 2.70.1. Bioconductor. https://bioconductor.org/packages/Biostrings
+`MarkerCompass` relies on several foundational open-source tools. If this pipeline assists in your research, please ensure the underlying framework authors are credited:
 
-Parada, A. E., Needham, D. M., & Fuhrman, J. A. (2016). Every base matters: assessing small subunit rRNA primers for marine microbiomes with mock communities, time series and global field samples. Environmental Microbiology, 18(5), 1403-1414.
+* **Biostrings (In-Silico PCR):** Pagès H, Aboyoun P, Gentleman R, DebRoy S (2024). *Biostrings: Efficient manipulation of biological strings.* R package.
+* **DECIPHER (Sequence Alignment & Distance):** Wright ES (2016). *Using DECIPHER v2.0 to Analyze Big Biological Sequence Data in R.* The R Journal, 8(1), 352-359.
+* **MAFFT (Command-Line Alignment):** Katoh K, Standley DM (2013). *MAFFT Multiple Sequence Alignment Software Version 7: Improvements in performance and usability.* Molecular Biology and Evolution, 30(4), 772-780.
+* **ape (Phylogenetic Reconstruction):** Paradis E, Schliep K (2019). *ape 5.0: an environment for modern phylogenetics and evolutionary analyses in R.* Bioinformatics, 35(3), 526-528.
+* **ggtree (Phylogenetic Visualization):** Yu G, Smith DK, Zhu H, Guan Y, Lam TT (2017). *ggtree: an R package for visualization and annotation of phylogenetic trees with their covariates and other associated data.* Methods in Ecology and Evolution, 8(1), 28-36.
+* **rentrez (NCBI API Interaction):** Winter DJ (2017). *rentrez: an R package for the NCBI eUtils API.* The R Journal, 9(2), 520-526.
 
-Paradis, E., & Schliep, K. (2019). ape 5.0: an environment for modern phylogenetics and evolutionary analyses in R. Bioinformatics, 35(3), 526-528.
+* **Bukin et al., 2019:** Bukin, Y. S., Galachyants, Y. P., Morozov, I. V., Grafodatskaya, A. D., Mikhailov, K. V., Alekseev, A. Y., ... & Likhoshway, Y. V. (2019). The effect of choice of 16S rRNA gene hypervariable regions on the results of next-generation sequencing-based analysis of biodiversity in environmental bacterial communities. *Scientific reports*, 9(1), 10734.
+* **Johnson et al., 2019:** Johnson, J. S., Spakowicz, D. J., Hong, B. Y., Petersen, L. M., Demkowicz, P., Chen, L., ... & Weinstock, G. M. (2019). Evaluation of 16S rRNA gene sequencing for species and strain-level microbiome analysis. *Nature communications*, 10(1), 5029.
+* **Klindworth et al., 2013:** Klindworth, A., Pruesse, E., Schweer, T., Peplies, J., Quast, C., Horn, M., & Glöckner, F. O. (2013). Evaluation of general 16S ribosomal RNA gene PCR primers for classical and next-generation sequencing-based diversity studies. *Nucleic acids research*, 41(1), e1-e1.
+* **Parada et al., 2016:** Parada, A. E., Needham, D. M., & Fuhrman, J. A. (2016). Every base matters: assessing small subunit rRNA primers for marine microbiomes with mock communities, time series and global field samples. *Environmental microbiology*, 18(5), 1403-1414.
 
-Parte, A. C., Sardà Carbasse, J., Meier-Kolthoff, J. P., Reimer, L. C., & Göker, M. (2020). List of Prokaryotic names with Standing in Nomenclature (LPSN) moves to the DSMZ. International Journal of Systematic and Evolutionary Microbiology, 70(11), 5607-5612.
+---
 
-Vetrovsky, T., & Baldrian, P. (2013). The variability of the 16S rRNA gene in bacterial genomes and its consequences for bacterial community analyses. PLoS One, 8(2), e57923.
+## 📚 Built-In Primer References
 
-Wickham, H. (2016). ggplot2: Elegant Graphics for Data Analysis. Springer-Verlag New York. https://ggplot2.tidyverse.org
+The script defaults to a curated list of commonly utilized, peer-reviewed 16S rRNA universal primer sets. If these default sets are utilized in your analysis, please refer to the original literature below:
 
-Wickham, H., François, R., Henry, L., Müller, K., & Vaughan, D. (2023). dplyr: A Grammar of Data Manipulation. R package version 1.1.4. https://CRAN.R-project.org/package=dplyr
-
-Wright, E. S. (2015). DECIPHER: harnessing local sequence context to improve protein multiple sequence alignment. BMC Bioinformatics, 16, 322. https://doi.org/10.1186/s12859-015-0749-z
-
-Yu, G., Smith, D. K., Zhu, H., Guan, Y., & Lam, T. T. Y. (2017). ggtree: an R package for visualization and annotation of phylogenetic trees with their covariates and other associated data. Methods in Ecology and Evolution, 8(1), 28-36.
-
-References for Built-in Default Primers
-Lane_1991: Lane, D. J. (1991). "16S/23S rRNA sequencing." Nucleic acid techniques in bacterial systematics.
-
-Muyzer_1993: Muyzer, G., et al. (1993). "Profiling of complex microbial populations by denaturing gradient gel electrophoresis analysis of polymerase chain reaction-amplified genes coding for 16S rRNA." AEM.
-
-Klindworth_2013: Klindworth, A., et al. (2013). "Evaluation of general 16S ribosomal RNA gene PCR primers for classical and next-generation sequencing-based diversity studies." Nucleic Acids Research.
-
-Takahashi_2014: Takahashi, S., et al. (2014). "A novel closed-tube method for calculating bacterial population sizes and comparing 16S rRNA gene amplicon sequencing data." PLoS One.
-
-Huber_2007: Huber, J. A., et al. (2007). "Microbial population structures in the deep marine biosphere." Science. (Popularized the 341F/1061R combo for V3-V6).
-
-Parada_Apprill_2016 / Parada_2016: Parada, A. E., et al. (2016). "Microbes across the water column... evaluation of updated 16S rRNA gene primers." Environmental Microbiology.
-
-Engelbrektson_2010: Engelbrektson, A., et al. (2010). "Experimental evaluation of primer sets for 16S rRNA gene sequencing." ISME Journal.
-
-Callahan_2019: Callahan, B. J., et al. (2019). "High-throughput amplicon sequencing of the full-length 16S rRNA gene with single-nucleotide resolution." Nucleic Acids Research. (Optimized the highly degenerate 27F/1492R combo for long-read sequencing).
+* **V1-V2 (Lane 1991):** Lane, D. J. (1991). 16S/23S rRNA sequencing. In *Nucleic acid techniques in bacterial systematics* (pp. 115-175).
+* **V1-V3 (Muyzer 1993):** Muyzer, G., de Waal, E. C., & Uitterlinden, A. G. (1993). Profiling of complex microbial populations by denaturing gradient gel electrophoresis analysis of polymerase chain reaction-amplified genes coding for 16S rRNA. *Applied and environmental microbiology*, 59(3), 695-700.
+* **V3-V4 (Klindworth 2013):** Klindworth, A., Pruesse, E., Schweer, T., Peplies, J., Quast, C., Horn, M., & Glöckner, F. O. (2013). Evaluation of general 16S ribosomal RNA gene PCR primers for classical and next-generation sequencing-based diversity studies. *Nucleic acids research*, 41(1), e1-e1.
+* **V3-V4 (Takahashi 2014):** Takahashi, S., Tomita, J., Nishioka, K., Hisada, T., & Nishijima, M. (2014). A novel closed-tube method for calculating bacterial population size and analyzing 16S rRNA gene amplicons. *PLoS One*, 9(5), e97323.
+* **V3-V6 (Huber 2007):** Huber, J. A., Mark Welch, D. B., Morrison, H. G., Huse, S. M., Neal, P. R., Butterfield, D. A., & Sogin, M. L. (2007). Microbial population structures in the deep marine biosphere. *Science*, 318(5847), 97-100.
+* **V4 EMP (Parada & Apprill 2016):** Parada, A. E., Needham, D. M., & Fuhrman, J. A. (2016). Every base matters: assessing small subunit rRNA primers for marine microbiomes with mock communities, time series and global field samples. *Environmental microbiology*, 18(5), 1403-1414. *(Note: Modified from original Apprill et al. 2015 constructs).*
+* **V4-V5 & V5-V7 (Engelbrektson 2010):** Engelbrektson, A., Kunin, V., Wrighton, K. C., Zvenigorodsky, N., Chen, F., Ochman, H., & Hugenholtz, P. (2010). Experimental factors affecting PCR-based estimates of microbial species richness and evenness. *The ISME journal*, 4(5), 642-647.
+* **Full-Length 16S (Callahan 2019):** Callahan, B. J., Wong, J., Heiner, C., Oh, S., Theriot, C. M., Gulati, A. S., ... & Bhatt, A. S. (2019). High-throughput amplicon sequencing of the full-length 16S rRNA gene with single-nucleotide resolution. *Nucleic acids research*, 47(18), e103-e103.
