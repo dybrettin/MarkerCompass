@@ -8,7 +8,7 @@
 
 ## 🧠 The Rationale: Why MarkerCompass?
 
-Targeted amplicon sequencing using marker genes (e.g., 16S rRNA, *rpoB*, *groL*, ITS) remains the gold standard for microbial taxonomic classification. However, high-throughput next-generation sequencing (NGS) platforms typically rely on short-read amplicons spanning only a fraction of the full-length gene (Bukin et al., 2019). 
+Targeted amplicon sequencing using marker genes (e.g., 16S rRNA, *rpoB*, *groL*) remains the gold standard for microbial taxonomic classification. However, high-throughput next-generation sequencing (NGS) platforms typically rely on short-read amplicons spanning only a fraction of the full-length gene (Bukin et al., 2019). 
 
 Relying on "universal" short-read amplicons presents two major challenges in microbiome and evolutionary research:
 
