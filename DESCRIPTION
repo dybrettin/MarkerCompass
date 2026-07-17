@@ -1,13 +1,13 @@
-Package: rResolution16S
+Package: MarkerCompass
 Type: Package
-Title: Automated Evaluation of 16S rRNA Gene Taxonomic Resolution
+Title: Automated Evaluation of Marker Gene Taxonomic Resolution
 Version: 1.0.0
 Date: 2026-05-13
 Author: Dylan J. L. Brettingham, Panuya Athithan, Jordan Meers, Brendan Daisley, Emma Allen-Vercoe.
 Maintainer: Dylan Brettingham <dbrettin@uoguelph.ca>
-URL: https://github.com/dybrettin/rResolution16S
-BugReports: https://github.com/dybrettin/rResolution16S/issues
-Description: rResolution16S takes a targeted, data-driven approach to objectively determine which 16S rRNA primer set yields the highest species-level resolution for specific bacterial genera. The package automates the retrieval of reference genomes from NCBI, extracts full-length 16S rRNA sequences from .fasta files via .gff annotations, and performs in silico PCR. It features comprehensive IUPAC-aware mismatch mapping, distance matrix calculations, and the automated generation of phylogenetic trees and sequence entropy maps. These outputs allow researchers to quantify taxonomic resolution and guide primer selection or determine the level of taxonomic resolution attainable from a given dataset of 16S rRNA amplicons.
+URL: https://github.com/dybrettin/MarkerCompass
+BugReports: https://github.com/dybrettin/MarkerCompass/issues
+Description: MarkerCompass: An R framework for benchmarking marker genes and primer sets for taxonomic resolution.
 License: GPL (>= 3)
 Encoding: UTF-8
 LazyData: true
