@@ -54,8 +54,12 @@ run_marker_pipeline(
   db_dir = "Database_Files",              # Where NCBI/LPSN masters are cached
   target_gene = "16S",                    # The gene to extract
   feature_type = "rRNA",                  # The feature type to filter by in the GFF
-  enable_lpsn_check = TRUE,               # Validates against LPSN
+  only_reference = TRUE,                  # Recommended to keep TRUE, avoids wrongly classified genomes
+  max_contigs = 100,                      # Lower value increases quality of genomes in general - only use if 'only_references = FALSE', reference genomes alaways kept
+  enable_lpsn_check = TRUE,               # Validates against LPSN, recommended to keep TRUE, clade based resolution is name based so synonym names ruin results
   lpsn_db_path = "Database_Files/lpsn_gss.csv"
+  refseq_max_age = Inf,                   # Age of refseq file downloaded, default 30 days, Inf will use file no matter the age
+  keep_genomes = FALSE                    # Space saving option to automatically delete (if FALSE) .fasta and .gff files aftre gene extraction
 )
 ```
 
