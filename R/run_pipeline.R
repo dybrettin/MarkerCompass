@@ -1,10 +1,10 @@
-#' Comprehensive 16S rRNA Gene Taxonomic Resolution Pipeline
+#' Comprehensive Marker Gene Taxonomic Resolution Pipeline
 #'
 #' This function downloads genomes from NCBI based on targeted genera, dereplicates them, and uses .gff 
-#' coordinates to extract full-length 16S genes from .fasta files. It aligns the 
-#' sequences, performs in-silico PCR on common 16S rRNA gene regions, and generates 
+#' coordinates to extract genes from .fasta files. It aligns the 
+#' sequences, performs in-silico PCR on gene regions based on primers inputed, and generates 
 #' phylogenetic resolution metrics as well as a primer mismatch report to help with 
-#' primer and 16S rRNA region selection.
+#' primer selection and taxonomic assignment analysis.
 #'
 #' @param target_genera A character vector of genera to analyze (e.g., c("Gilliamella", "Snodgrassella")) or input a .csv file with a list of genera and all will be processed with a log file to summarize resolution of primers for each genus.
 #' @param output_dir String. Path to the folder where results should be saved. Defaults to current working directory. Each genera targeted generates a new folder in the output directory with all output files
@@ -731,7 +731,7 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     
     # Gene/Primer Resolution & Coverage
     message("--- Phase 9: Resolution & Coverage ---")
-    ref_meta <- full_metadata %>% filter(Is_VIP) %>% mutate(Clean_Species = gsub("\\[|\\]", "", word(organism_name, 1, 2)))
+    ref_meta <- full_metadata %>% filter(Is_VIP) %>% mutate(Clean_Species = gsub("\\[|\\]", "", stringr::word(organism_name, 1, 2)))
     TOTAL_REF_SPECIES <- n_distinct(ref_meta$Clean_Species); if(TOTAL_REF_SPECIES==0) TOTAL_REF_SPECIES <- 1
     scores <- data.frame()
     full_aln_path <- file.path(dir_alignments, paste0("Alignment_Full_Extracted_", target_gene, ".fasta"))
@@ -739,22 +739,49 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     
     for(f in files) {
       aln <- readDNAStringSet(f)
-      aln_accs <- str_extract(names(aln), "GCF_[0-9]+\\.[0-9]+")
+      aln_accs <- stringr::str_extract(names(aln), "GCF_[0-9]+\\.[0-9]+")
       ref_accs <- aln_accs[aln_accs %in% ref_meta$assembly_accession]
       count_resolved <- 0
       
       if(length(ref_accs) > 1) {
         ref_aln <- aln[aln_accs %in% ref_accs]
-        if(length(ref_aln) > 1) {
-          d <- DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
-          row_accs <- str_extract(rownames(d), "GCF_[0-9]+\\.[0-9]+")
-          row_sp <- gsub("\\[|\\]", "", word(full_metadata$organism_name[match(row_accs, full_metadata$assembly_accession)], 1, 2))
-          for(sp in unique(row_sp)) { 
+        
+        # We need at least 3 sequences to build a meaningful tree for monophyly checking
+        if(length(ref_aln) >= 3) {
+          d <- DECIPHER::DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
+          ref_tree <- ape::njs(d)
+          
+          # Map the tree tips back to their species names
+          tip_accs <- stringr::str_extract(ref_tree$tip.label, "GCF_[0-9]+\\.[0-9]+")
+          tip_sp <- gsub("\\[|\\]", "", stringr::word(full_metadata$organism_name[match(tip_accs, full_metadata$assembly_accession)], 1, 2))
+          
+          for(sp in unique(tip_sp)) { 
             if(!is.na(sp)) { 
-              others <- which(row_sp != sp); my_idx <- which(row_sp == sp)
-              if(length(others)>0 && min(d[my_idx, others]) > 0) count_resolved <- count_resolved + 1 
+              my_tips <- ref_tree$tip.label[tip_sp == sp]
+              my_idx <- which(rownames(d) %in% my_tips)
+              others <- which(!(rownames(d) %in% my_tips))
+              
+              # 1. Strict Distance Check: Ensure it is not 100% identical to a DIFFERENT species
+              min_dist_outgroup <- if(length(others) > 0 && length(my_idx) > 0) min(d[my_idx, others]) else 1
+              
+              if(min_dist_outgroup > 0) {
+                 # 2. Strict Topology Check
+                 if(length(my_tips) == 1) {
+                    # If a species only has one sequence and it's distinct, it is resolved
+                    count_resolved <- count_resolved + 1
+                 } else {
+                    # If it has multiple copies/strains, they MUST form an exclusive monophyletic clade
+                    if(ape::is.monophyletic(ref_tree, my_tips)) {
+                       count_resolved <- count_resolved + 1
+                    }
+                 }
+              }
             } 
           }
+        } else if (length(ref_aln) == 2) {
+           # Fallback for tiny datasets where a tree can't be built
+           d <- DECIPHER::DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
+           if(d[1,2] > 0) count_resolved <- 2 
         }
       }
       
@@ -1210,4 +1237,4 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     message(paste(">>> PIPELINE COMPLETE. Higher Taxa summary saved to:", file.path(output_dir, "Master_Higher_Taxa_Summary.csv")))
   }
 
-} # <--- Bracket 2: This is the FINAL bracket that closes 'run_16s_pipeline'
+} # <--- Bracket 2: This is the FINAL bracket that closes 'run_marker_pipeline'
