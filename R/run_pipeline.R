@@ -737,8 +737,17 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     full_aln_path <- file.path(dir_alignments, paste0("Alignment_Full_Extracted_", target_gene, ".fasta"))
     full_seqs <- if(file.exists(full_aln_path)) readDNAStringSet(full_aln_path) else NULL
     
+    # Initialize the Species-Level Tracking Dataframe
+    species_res_df <- data.frame(Genus = target_genus, Species = unique(ref_meta$Clean_Species), stringsAsFactors = FALSE)
+    
     for(f in files) {
       aln <- readDNAStringSet(f)
+      primer_name <- sub("Alignment_", "", sub("\\.fasta$", "", basename(f)))
+      
+      # Setup default status for this primer as missing (will be overwritten if found)
+      current_primer_status <- rep("Missing_or_Failed_PCR", nrow(species_res_df))
+      names(current_primer_status) <- species_res_df$Species
+      
       aln_accs <- stringr::str_extract(names(aln), "GCF_[0-9]+\\.[0-9]+")
       ref_accs <- aln_accs[aln_accs %in% ref_meta$assembly_accession]
       count_resolved <- 0
@@ -746,12 +755,10 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       if(length(ref_accs) > 1) {
         ref_aln <- aln[aln_accs %in% ref_accs]
         
-        # We need at least 3 sequences to build a meaningful tree for monophyly checking
         if(length(ref_aln) >= 3) {
           d <- DECIPHER::DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
           ref_tree <- ape::njs(d)
           
-          # Map the tree tips back to their species names
           tip_accs <- stringr::str_extract(ref_tree$tip.label, "GCF_[0-9]+\\.[0-9]+")
           tip_sp <- gsub("\\[|\\]", "", stringr::word(full_metadata$organism_name[match(tip_accs, full_metadata$assembly_accession)], 1, 2))
           
@@ -761,31 +768,42 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
               my_idx <- which(rownames(d) %in% my_tips)
               others <- which(!(rownames(d) %in% my_tips))
               
-              # 1. Strict Distance Check: Ensure it is not 100% identical to a DIFFERENT species
               min_dist_outgroup <- if(length(others) > 0 && length(my_idx) > 0) min(d[my_idx, others]) else 1
               
               if(min_dist_outgroup > 0) {
-                 # 2. Strict Topology Check
                  if(length(my_tips) == 1) {
-                    # If a species only has one sequence and it's distinct, it is resolved
+                    current_primer_status[sp] <- "Monophyletic"
                     count_resolved <- count_resolved + 1
                  } else {
-                    # If it has multiple copies/strains, they MUST form an exclusive monophyletic clade
                     if(ape::is.monophyletic(ref_tree, my_tips)) {
+                       current_primer_status[sp] <- "Monophyletic"
                        count_resolved <- count_resolved + 1
+                    } else {
+                       current_primer_status[sp] <- "Polyphyletic"
                     }
                  }
+              } else {
+                 current_primer_status[sp] <- "Polyphyletic (Identical to outgroup)"
               }
             } 
           }
         } else if (length(ref_aln) == 2) {
-           # Fallback for tiny datasets where a tree can't be built
            d <- DECIPHER::DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
-           if(d[1,2] > 0) count_resolved <- 2 
+           tip_accs <- stringr::str_extract(names(ref_aln), "GCF_[0-9]+\\.[0-9]+")
+           tip_sp <- gsub("\\[|\\]", "", stringr::word(full_metadata$organism_name[match(tip_accs, full_metadata$assembly_accession)], 1, 2))
+           
+           if(d[1,2] > 0) {
+              count_resolved <- 2 
+              current_primer_status[tip_sp] <- "Monophyletic"
+           } else {
+              current_primer_status[tip_sp] <- "Polyphyletic (Identical to outgroup)"
+           }
         }
       }
       
-      primer_name <- sub("Alignment_", "", sub("\\.fasta$", "", basename(f)))
+      # Bind the status column to the dataframe
+      species_res_df[[primer_name]] <- current_primer_status[species_res_df$Species]
+      
       missing_accs <- setdiff(ref_meta$assembly_accession, ref_accs)
       dropout_str <- ""
       
@@ -814,6 +832,13 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       }
       scores <- rbind(scores, data.frame(Primer_Set = primer_name, Resolved_Count = count_resolved, Total_Species = TOTAL_REF_SPECIES, Percent_Resolved = (count_resolved / TOTAL_REF_SPECIES) * 100, Dropout_Label = dropout_str))
     }
+    
+    # Save the local genus-level species report
+    write.csv(species_res_df, file.path(dir_results, paste0("Species_Resolution_Report_", target_genus, ".csv")), row.names=FALSE)
+    
+    # Store it in the master list so it can be combined at the very end
+    if(!exists("master_species_log")) master_species_log <- list()
+    master_species_log[[target_genus]] <- species_res_df
     
     if(nrow(scores) > 0) {
       scores$Count_Label <- paste0(scores$Resolved_Count, "/", scores$Total_Species)
@@ -1237,4 +1262,9 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     message(paste(">>> PIPELINE COMPLETE. Higher Taxa summary saved to:", file.path(output_dir, "Master_Higher_Taxa_Summary.csv")))
   }
 
+  if (exists("master_species_log") && length(master_species_log) > 0) {
+    write.csv(dplyr::bind_rows(master_species_log), file.path(output_dir, "Master_Species_Resolution_Summary.csv"), row.names = FALSE)
+    message(paste(">>> PIPELINE COMPLETE. Master Species Resolution summary saved to:", file.path(output_dir, "Master_Species_Resolution_Summary.csv")))
+  }
+  
 } # <--- Bracket 2: This is the FINAL bracket that closes 'run_marker_pipeline'
