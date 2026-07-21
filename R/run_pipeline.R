@@ -757,6 +757,10 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
         
         if(length(ref_aln) >= 3) {
           d <- DECIPHER::DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
+          
+          d[is.na(d)] <- 1
+          d[is.nan(d)] <- 1
+          
           ref_tree <- ape::njs(d)
           
           tip_accs <- stringr::str_extract(ref_tree$tip.label, "GCF_[0-9]+\\.[0-9]+")
@@ -789,6 +793,10 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
           }
         } else if (length(ref_aln) == 2) {
            d <- DECIPHER::DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
+           
+           d[is.na(d)] <- 1
+           d[is.nan(d)] <- 1
+           
            tip_accs <- stringr::str_extract(names(ref_aln), "GCF_[0-9]+\\.[0-9]+")
            tip_sp <- gsub("\\[|\\]", "", stringr::word(full_metadata$organism_name[match(tip_accs, full_metadata$assembly_accession)], 1, 2))
            
@@ -1266,5 +1274,5 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     write.csv(dplyr::bind_rows(master_species_log), file.path(output_dir, "Master_Species_Resolution_Summary.csv"), row.names = FALSE)
     message(paste(">>> PIPELINE COMPLETE. Master Species Resolution summary saved to:", file.path(output_dir, "Master_Species_Resolution_Summary.csv")))
   }
-  
+
 } # <--- Bracket 2: This is the FINAL bracket that closes 'run_marker_pipeline'
