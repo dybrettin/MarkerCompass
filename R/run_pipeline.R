@@ -1018,29 +1018,37 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
           break
         }
         
-        # 4. Build the Scout Tree
-        # Combine the target genus amplicons with the new outgroup amplicons
+      # 4. Build the Scout Tree
         combined_scout_seqs <- c(general_gene, scout_seqs)
         scout_aln <- smart_align(combined_scout_seqs, mafft_exec = mafft_path)
         
-        # Calculate the tree
+        # Calculate the distance safely
         scout_dist <- DistanceMatrix(scout_aln, verbose=FALSE)
-        scout_tree <- njs(scout_dist)
+        scout_dist[is.na(scout_dist)] <- 1
+        scout_dist[is.nan(scout_dist)] <- 1
+        
+        # Generate the absolute distance matrix directly (bypassing the need for a tree!)
+        dist_matrix <- as.matrix(scout_dist)
+        target_tips <- names(combined_scout_seqs)[!grepl("OUTGROUP_", names(combined_scout_seqs))]
+        outgroup_tips <- names(combined_scout_seqs)[grepl("OUTGROUP_", names(combined_scout_seqs))]
 
-        # Save the Scout Alignment and Tree (Updated Paths)
-        message("  -> Saving Scout Alignment and Tree...")
+        message("  -> Saving Scout Alignment...")
         writeXStringSet(scout_aln, file.path(lvl_align_dir, paste0("Alignment_Scout_", current_tax_level, "_", target_genus, ".fasta")))
         
-        pdf(file.path(lvl_tree_dir, paste0("Tree_Scout_", current_tax_level, "_", target_genus, ".pdf")), width=15, height=max(10, length(scout_tree$tip.label)*0.2))
-        p_scout <- ggtree(scout_tree) + geom_tiplab(size=2) + theme_tree2() + 
-          labs(title=paste("Scout Tree:", target_genus, "within", current_tax_level, target_clade_name)) + hexpand(0.5)
-        print(p_scout)
-        dev.off()
+        # Only build and save the Scout Tree if we have 3 or more sequences
+        if(length(combined_scout_seqs) >= 3) {
+            scout_tree <- njs(scout_dist)
+            pdf(file.path(lvl_tree_dir, paste0("Tree_Scout_", current_tax_level, "_", target_genus, ".pdf")), width=15, height=max(10, length(scout_tree$tip.label)*0.2))
+            p_scout <- ggtree(scout_tree) + geom_tiplab(size=2) + theme_tree2() + 
+              labs(title=paste("Scout Tree:", target_genus, "within", current_tax_level, target_clade_name)) + hexpand(0.5)
+            print(p_scout)
+            dev.off()
+        }
 
         # ---------------------------
         # PHASE 2: THREAT DETECTION
         # ---------------------------
-        message("  -> Calculating Cophenetic distances to identify nearest threats...")
+        message("  -> Calculating distances to identify nearest threats...")
         
         # 1. Generate the absolute distance matrix from the tree
         dist_matrix <- ape::cophenetic.phylo(scout_tree)
@@ -1125,22 +1133,28 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
         combined_swarm_seqs <- c(general_gene, swarm_seqs)
         swarm_aln <- smart_align(combined_swarm_seqs, mafft_exec = mafft_path)
 
-        # Save the Swarm Alignment
-        message("  -> Saving Swarm Alignment...")
-        writeXStringSet(swarm_aln, file.path(dir_alignments, paste0("Alignment_Swarm_", current_tax_level, "_", target_genus, ".fasta")))
-
-        swarm_tree <- njs(DistanceMatrix(swarm_aln, verbose=FALSE))
-
-        # --- NEW: Save the Swarm Alignment and Tree (Updated Paths) ---
         message("  -> Saving Swarm Alignment...")
         writeXStringSet(swarm_aln, file.path(lvl_align_dir, paste0("Alignment_Swarm_", current_tax_level, "_", target_genus, ".fasta")))
         
-        swarm_tree <- njs(DistanceMatrix(swarm_aln, verbose=FALSE))
-        
-        pdf(file.path(lvl_tree_dir, paste0("Tree_Swarm_", current_tax_level, "_", target_genus, ".pdf")), width=15, height=max(10, length(swarm_tree$tip.label)*0.2))
-        p_swarm <- ggtree(swarm_tree) + geom_tiplab(size=2) + theme_tree2() + labs(title=paste("Swarm Tree:", target_genus, "vs Top Threats at", current_tax_level, "Level")) + hexpand(0.5)
-        print(p_swarm)
-        dev.off()
+        swarm_dist <- DistanceMatrix(swarm_aln, verbose=FALSE)
+        swarm_dist[is.na(swarm_dist)] <- 1
+        swarm_dist[is.nan(swarm_dist)] <- 1
+
+        target_tips_final <- names(combined_swarm_seqs)[!grepl("OUTGROUP_", names(combined_swarm_seqs))]
+        outgroup_tips_final <- names(combined_swarm_seqs)[grepl("OUTGROUP_", names(combined_swarm_seqs))]
+
+        if (length(combined_swarm_seqs) >= 3) {
+            swarm_tree <- njs(swarm_dist)
+            pdf(file.path(lvl_tree_dir, paste0("Tree_Swarm_", current_tax_level, "_", target_genus, ".pdf")), width=15, height=max(10, length(swarm_tree$tip.label)*0.2))
+            p_swarm <- ggtree(swarm_tree) + geom_tiplab(size=2) + theme_tree2() + labs(title=paste("Swarm Tree:", target_genus, "vs Top Threats at", current_tax_level, "Level")) + hexpand(0.5)
+            print(p_swarm)
+            dev.off()
+            
+            is_exclusive_full <- ape::is.monophyletic(swarm_tree, target_tips_final)
+        } else {
+            # Fallback for 2-sequence Swarm (1 Target, 1 Threat)
+            is_exclusive_full <- as.matrix(swarm_dist)[target_tips_final[1], outgroup_tips_final[1]] > 0
+        }
 
         # ---------------------------------
         #  THE MULTI-PRIMER MONOPHYLY TEST
@@ -1203,23 +1217,32 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
           has_targets <- any(!grepl("OUTGROUP_", names(current_amplicons)))
           has_outgroups <- any(grepl("OUTGROUP_", names(current_amplicons)))
           
-          # Check if the PCR successfully captured both targets and outgroups
-          if(length(current_amplicons) >= 3 && has_targets && has_outgroups) {
+          if(length(current_amplicons) >= 2 && has_targets && has_outgroups) {
              # Re-align the amplicons and build the V-region tree
              amp_aln <- smart_align(current_amplicons, mafft_exec = mafft_path)
-             amp_tree <- njs(DistanceMatrix(amp_aln, verbose=FALSE))
              
+             amp_dist <- DistanceMatrix(amp_aln, verbose=FALSE)
+             amp_dist[is.na(amp_dist)] <- 1
+             amp_dist[is.nan(amp_dist)] <- 1
+
              writeXStringSet(amp_aln, file.path(lvl_align_dir, paste0("Alignment_Swarm_", current_tax_level, "_", region_name, "_", target_genus, ".fasta")))
              
-             pdf(file.path(lvl_tree_dir, paste0("Tree_Swarm_", current_tax_level, "_", region_name, "_", target_genus, ".pdf")), width=15, height=max(10, length(amp_tree$tip.label)*0.2))
-             p_amp <- ggtree(amp_tree) + geom_tiplab(size=2) + theme_tree2() + labs(title=paste(region_name, "Swarm Tree:", target_genus, "at", current_tax_level, "Level")) + hexpand(0.5)
-             print(p_amp)
-             dev.off()
-             
-             t_tips <- amp_tree$tip.label[!grepl("OUTGROUP_", amp_tree$tip.label)]
-             
+             t_tips <- names(current_amplicons)[!grepl("OUTGROUP_", names(current_amplicons))]
+             o_tips <- names(current_amplicons)[grepl("OUTGROUP_", names(current_amplicons))]
+
+             if(length(current_amplicons) >= 3) {
+                 amp_tree <- njs(amp_dist)
+                 pdf(file.path(lvl_tree_dir, paste0("Tree_Swarm_", current_tax_level, "_", region_name, "_", target_genus, ".pdf")), width=15, height=max(10, length(amp_tree$tip.label)*0.2))
+                 p_amp <- ggtree(amp_tree) + geom_tiplab(size=2) + theme_tree2() + labs(title=paste(region_name, "Swarm Tree:", target_genus, "at", current_tax_level, "Level")) + hexpand(0.5)
+                 print(p_amp)
+                 dev.off()
+                 
+                 is_exc <- ape::is.monophyletic(amp_tree, t_tips)
+             } else {
+                 is_exc <- as.matrix(amp_dist)[t_tips[1], o_tips[1]] > 0
+             }
+
              if(length(t_tips) > 0) {
-                is_exc <- ape::is.monophyletic(amp_tree, t_tips)
                 level_log <- rbind(level_log, data.frame(Primer_Set = region_name, Status = ifelse(is_exc, "Resolved", "Polyphyletic (Failed)")))
              } else {
                 level_log <- rbind(level_log, data.frame(Primer_Set = region_name, Status = "PCR_Failure (Target Genus Dropped)"))
