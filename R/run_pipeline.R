@@ -28,7 +28,7 @@
 #' @importFrom dplyr %>% mutate filter arrange desc select group_by slice ungroup case_when left_join bind_rows n n_distinct relocate summarize
 #' @importFrom ggplot2 ggplot aes labs theme_bw theme geom_bar geom_text geom_area geom_rect scale_fill_manual scale_y_continuous coord_flip element_text ggsave
 #' @importFrom stringr str_extract word
-#' @importFrom Biostrings readDNAStringSet writeXStringSet DNAStringSet DNAString reverseComplement matchPattern matchLRPatterns subseq width pairwiseAlignment alignedPattern alignedSubject
+#' @importFrom Biostrings readDNAStringSet writeXStringSet DNAStringSet DNAString reverseComplement matchPattern matchLRPatterns subseq width
 #' @importFrom IRanges subject
 #' @importFrom DECIPHER RemoveGaps DistanceMatrix AlignSeqs
 #' @importFrom ape njs
@@ -737,8 +737,12 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     full_aln_path <- file.path(dir_alignments, paste0("Alignment_Full_Extracted_", target_gene, ".fasta"))
     full_seqs <- if(file.exists(full_aln_path)) readDNAStringSet(full_aln_path) else NULL
     
-    # Initialize the Species-Level Tracking Dataframe
-    species_res_df <- data.frame(Genus = target_genus, Species = unique(ref_meta$Clean_Species), stringsAsFactors = FALSE)
+    # Initialize the Species-Level Tracking Dataframe safely
+    if (nrow(ref_meta) > 0) {
+      species_res_df <- data.frame(Genus = target_genus, Species = unique(ref_meta$Clean_Species), stringsAsFactors = FALSE)
+    } else {
+      species_res_df <- data.frame(Genus = character(0), Species = character(0), stringsAsFactors = FALSE)
+    }
     
     for(f in files) {
       aln <- readDNAStringSet(f)
