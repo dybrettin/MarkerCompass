@@ -312,6 +312,11 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     filtered_meta$local_path <- NA; filtered_meta$local_gff <- NA
     message(paste("  -> Processing", nrow(filtered_meta), "genomes for", target_genus, "..."))
     
+    if (nrow(filtered_meta) == 0) {
+      message(paste("  -> [SKIP] All genomes for", target_genus, "failed LPSN/QC checks. Moving to next..."))
+      next  
+    }
+
     for(i in 1:nrow(filtered_meta)) {
       acc <- filtered_meta$assembly_accession[i]
       ftp_base <- filtered_meta$ftp_path[i]
