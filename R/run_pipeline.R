@@ -624,15 +624,23 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       write.csv(primer_mismatch_report, file.path(dir_logs, "primer_mismatch_report_summary.csv"), row.names=FALSE)
     }
     
-    # Tree Generation
+   # Tree Generation
     message("--- Phase 7: Trees ---")
     plot_tree <- function(aln_file, suffix, filter_ref=FALSE) {
       aln <- readDNAStringSet(aln_file)
-      aln_accs <- str_extract(names(aln), "GCF_[0-9]+\\.[0-9]+")
+      aln_accs <- stringr::str_extract(names(aln), "GCF_[0-9]+\\.[0-9]+")
       if(filter_ref) aln <- aln[aln_accs %in% full_metadata$assembly_accession[full_metadata$Is_VIP]]
       if(length(aln) < 3) return(NULL)
-      tree <- njs(DistanceMatrix(aln, verbose=FALSE)); num_tips <- length(tree$tip.label)
       
+      # FIX: Safe Distance Matrix and Tree Building
+      d <- DECIPHER::DistanceMatrix(aln, verbose=FALSE)
+      d[is.na(d)] <- 1
+      d[is.nan(d)] <- 1
+      
+      tree <- tryCatch({ ape::njs(d) }, error = function(e) NULL)
+      if(is.null(tree)) return(NULL) # Safely aborts if distance information is insufficient
+      
+      num_tips <- length(tree$tip.label)
       clean_tips <- gsub("_copy", " (copy", tree$tip.label)
       tree$tip.label <- paste0(gsub("_", " ", clean_tips), ")")
       
@@ -761,48 +769,55 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       ref_accs <- aln_accs[aln_accs %in% ref_meta$assembly_accession]
       count_resolved <- 0
       
-      if(length(ref_accs) > 1) {
+      if(length(ref_accs) >= 1) {
         ref_aln <- aln[aln_accs %in% ref_accs]
         
-        if(length(ref_aln) >= 3) {
+        #Single-Species Genus Bypass
+        if (TOTAL_REF_SPECIES == 1) {
+            tip_accs <- stringr::str_extract(names(ref_aln), "GCF_[0-9]+\\.[0-9]+")
+            tip_sp <- gsub("\\[|\\]", "", stringr::word(full_metadata$organism_name[match(tip_accs, full_metadata$assembly_accession)], 1, 2))
+            count_resolved <- 1
+            current_primer_status[unique(tip_sp)] <- "Monophyletic"
+            
+        } else if(length(ref_aln) >= 3) {
           d <- DECIPHER::DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
-          
           d[is.na(d)] <- 1
           d[is.nan(d)] <- 1
           
-          ref_tree <- ape::njs(d)
+          ref_tree <- tryCatch({ ape::njs(d) }, error = function(e) NULL)
           
-          tip_accs <- stringr::str_extract(ref_tree$tip.label, "GCF_[0-9]+\\.[0-9]+")
-          tip_sp <- gsub("\\[|\\]", "", stringr::word(full_metadata$organism_name[match(tip_accs, full_metadata$assembly_accession)], 1, 2))
-          
-          for(sp in unique(tip_sp)) { 
-            if(!is.na(sp)) { 
-              my_tips <- ref_tree$tip.label[tip_sp == sp]
-              my_idx <- which(rownames(d) %in% my_tips)
-              others <- which(!(rownames(d) %in% my_tips))
+          if (!is.null(ref_tree)) {
+              tip_accs <- stringr::str_extract(ref_tree$tip.label, "GCF_[0-9]+\\.[0-9]+")
+              tip_sp <- gsub("\\[|\\]", "", stringr::word(full_metadata$organism_name[match(tip_accs, full_metadata$assembly_accession)], 1, 2))
               
-              min_dist_outgroup <- if(length(others) > 0 && length(my_idx) > 0) min(d[my_idx, others]) else 1
-              
-              if(min_dist_outgroup > 0) {
-                 if(length(my_tips) == 1) {
-                    current_primer_status[sp] <- "Monophyletic"
-                    count_resolved <- count_resolved + 1
-                 } else {
-                    if(ape::is.monophyletic(ref_tree, my_tips)) {
-                       current_primer_status[sp] <- "Monophyletic"
-                       count_resolved <- count_resolved + 1
-                    } else {
-                       current_primer_status[sp] <- "Polyphyletic"
-                    }
-                 }
-              } else {
-                 current_primer_status[sp] <- "Polyphyletic (Identical to outgroup)"
+              for(sp in unique(tip_sp)) { 
+                if(!is.na(sp)) { 
+                  my_tips <- ref_tree$tip.label[tip_sp == sp]
+                  my_idx <- which(rownames(d) %in% my_tips)
+                  others <- which(!(rownames(d) %in% my_tips))
+                  
+                  min_dist_outgroup <- if(length(others) > 0 && length(my_idx) > 0) min(d[my_idx, others]) else 1
+                  
+                  if(min_dist_outgroup > 0) {
+                     if(length(my_tips) == 1) {
+                        current_primer_status[sp] <- "Monophyletic"
+                        count_resolved <- count_resolved + 1
+                     } else {
+                        if(ape::is.monophyletic(ref_tree, my_tips)) {
+                           current_primer_status[sp] <- "Monophyletic"
+                           count_resolved <- count_resolved + 1
+                        } else {
+                           current_primer_status[sp] <- "Polyphyletic"
+                        }
+                     }
+                  } else {
+                     current_primer_status[sp] <- "Polyphyletic (Identical to outgroup)"
+                  }
+                } 
               }
-            } 
           }
         } else if (length(ref_aln) == 2) {
            d <- DECIPHER::DistanceMatrix(ref_aln, verbose=FALSE, includeTerminalGaps=TRUE)
-           
            d[is.na(d)] <- 1
            d[is.nan(d)] <- 1
            
@@ -810,7 +825,7 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
            tip_sp <- gsub("\\[|\\]", "", stringr::word(full_metadata$organism_name[match(tip_accs, full_metadata$assembly_accession)], 1, 2))
            
            if(d[1,2] > 0) {
-              count_resolved <- 2 
+              count_resolved <- length(unique(tip_sp)) 
               current_primer_status[tip_sp] <- "Monophyletic"
            } else {
               current_primer_status[tip_sp] <- "Polyphyletic (Identical to outgroup)"
