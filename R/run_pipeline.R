@@ -428,11 +428,19 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
             if (is_valid_target) {
               contig <- parts[1]; start_pos <- as.numeric(parts[4]); end_pos <- as.numeric(parts[5]); strand <- parts[7]
               if (contig %in% names(genome)) {
-                seq_frag <- subseq(genome[[contig]], start=start_pos, end=end_pos)
-                if (strand == "-") seq_frag <- reverseComplement(seq_frag)
                 
-                # Minimum size dropped to 200bp for smaller genes
-                if (length(seq_frag) > 200) extracted_seqs <- c(extracted_seqs, DNAStringSet(seq_frag))
+                # --- BOUNDARY GUARDRAILS ---
+                contig_len <- length(genome[[contig]])
+                safe_start <- max(1, start_pos)
+                safe_end <- min(contig_len, end_pos)
+                
+                if (safe_start <= safe_end) {
+                  seq_frag <- subseq(genome[[contig]], start=safe_start, end=safe_end)
+                  if (strand == "-") seq_frag <- reverseComplement(seq_frag)
+                  
+                  # Minimum size dropped to 200bp for smaller genes
+                  if (length(seq_frag) > 200) extracted_seqs <- c(extracted_seqs, DNAStringSet(seq_frag))
+                }
               }
             }
           }
