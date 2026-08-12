@@ -337,6 +337,11 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     
     full_metadata <- filtered_meta %>% filter(!is.na(local_path)) %>% mutate(Isolation_Source="Unknown", Host="Unknown", Country="Unknown")
     
+    if (nrow(full_metadata) == 0) {
+      message(paste("  -> [SKIP] All genomes for", target_genus, "failed to download (likely dead NCBI links). Moving to next..."))
+      next
+    }
+
     # Fetch Full Taxonomy Lineage
     message(paste("  -> Fetching full NCBI taxonomy for", target_genus, "..."))
     tax_info <- tryCatch({
