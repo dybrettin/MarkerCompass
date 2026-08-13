@@ -946,11 +946,37 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
         
         outgroup_genera <- c()
         if(!is.null(search_res) && length(search_res$ids) > 0) {
-          tax_xml <- tryCatch(rentrez::entrez_fetch(db="taxonomy", id=search_res$ids, rettype="xml"), error=function(e) NULL)
-          if(!is.null(tax_xml)) {
-            xml_doc <- xml2::read_xml(tax_xml)
-            outgroup_genera <- xml2::xml_text(xml2::xml_find_all(xml_doc, "//ScientificName"))
-            outgroup_genera <- outgroup_genera[outgroup_genera != target_genus]
+          max_retries <- 3
+          retry_count <- 0
+          fetch_success <- FALSE
+          
+          while(retry_count < max_retries && !fetch_success) {
+            retry_count <- retry_count + 1
+            
+            # Temporarily boost the global timeout limit to 5 minutes for this fetch
+            old_timeout <- getOption("timeout")
+            options(timeout = max(300, old_timeout))
+            
+            tax_xml <- tryCatch(rentrez::entrez_fetch(db="taxonomy", id=search_res$ids, rettype="xml"), error=function(e) NULL)
+            
+            if(!is.null(tax_xml)) {
+              xml_doc <- tryCatch(xml2::read_xml(tax_xml), error=function(e) NULL)
+              
+              if(!is.null(xml_doc)) {
+                outgroup_genera <- xml2::xml_text(xml2::xml_find_all(xml_doc, "//ScientificName"))
+                outgroup_genera <- outgroup_genera[outgroup_genera != target_genus]
+                fetch_success <- TRUE
+              }
+            }
+            
+            # Restore original timeout setting
+            options(timeout = old_timeout)
+            
+            # If it failed, wait 5 seconds before trying again to prevent IP bans
+            if(!fetch_success && retry_count < max_retries) {
+               message(paste("  -> [WARNING] NCBI taxonomy fetch/parse failed. Retrying in 5s (Attempt", retry_count + 1, "of", max_retries, ")..."))
+               Sys.sleep(5) 
+            }
           }
         }
         
