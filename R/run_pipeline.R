@@ -431,7 +431,7 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
               }
             }
             if (is_valid_target) {
-              contig <- parts[1]; start_pos <- as.numeric(parts[4]); end_pos <- as.numeric(parts[5]); strand <- parts[7]
+              contig <- trimws(parts[1]); start_pos <- as.numeric(parts[4]); end_pos <- as.numeric(parts[5]); strand <- parts[7]
               if (contig %in% names(genome)) {
                 
                 # --- BOUNDARY GUARDRAILS ---
