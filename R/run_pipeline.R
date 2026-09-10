@@ -28,7 +28,7 @@
 #' @importFrom dplyr %>% mutate filter arrange desc select group_by slice ungroup case_when left_join bind_rows n n_distinct relocate summarize
 #' @importFrom ggplot2 ggplot aes labs theme_bw theme geom_bar geom_text geom_area geom_rect scale_fill_manual scale_y_continuous coord_flip element_text ggsave
 #' @importFrom stringr str_extract word
-#' @importFrom pwalign pairwiseAlignment
+#' @importFrom pwalign pairwiseAlignment alignedPattern alignedSubject
 #' @importFrom Biostrings readDNAStringSet writeXStringSet DNAStringSet DNAString reverseComplement matchPattern matchLRPatterns subseq width
 #' @importFrom IRanges subject
 #' @importFrom DECIPHER RemoveGaps DistanceMatrix AlignSeqs
@@ -507,13 +507,13 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       } else { return(AlignSeqs(seqs, verbose = FALSE)) }
     }
     
-  # Custom function to generate IUPAC-aware visual alignments
+ # Custom function to generate IUPAC-aware visual alignments
     get_mismatch_info <- function(primer_seq, target_seq) {
       aln <- pwalign::pairwiseAlignment(primer_seq, target_seq, type="global")
       
       # Use alignedPattern and alignedSubject to safely extract sequences and bypass the namespace firewall
-      p_aln_str <- as.character(Biostrings::alignedPattern(aln))
-      t_aln_str <- as.character(Biostrings::alignedSubject(aln))
+      p_aln_str <- as.character(pwalign::alignedPattern(aln))
+      t_aln_str <- as.character(pwalign::alignedSubject(aln))
       
       p_aln <- strsplit(p_aln_str, "")[[1]]
       t_aln <- strsplit(t_aln_str, "")[[1]]
