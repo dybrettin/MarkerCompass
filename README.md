@@ -123,7 +123,7 @@ The `run_marker_pipeline()` function accepts a variety of parameters to fine-tun
 * **`output_dir`**: Path to the folder where results should be saved. Each targeted genus generates a dedicated subfolder here. *(Default: `"."`)*
 * **`db_dir`**: Path to the directory where master databases (NCBI summary, LPSN) are stored. Setting this to a static folder prevents the pipeline from re-downloading massive databases for every new run. *(Default: `"."`)*
 * **`lpsn_db_path`**: Path to your local LPSN database CSV file. *(Default: `"lpsn_gss.csv"`)*
-* **`mafft_path`**: Path to your local MAFFT executable. If MAFFT is not found, the pipeline automatically falls back to the native R DECIPHER package. *(Default: `"mafft"`)*
+* **`mafft_path`**: Path to your local MAFFT executable. If MAFFT is not found, the pipeline automatically falls back to the native R DECIPHER package. *(Default: `"mafft.bat"`)*
 
 ### Gene Targeting
 * **`target_gene`**: The specific gene text to search for in the `.gff` file. *(Default: `"16S"`)*
@@ -193,7 +193,7 @@ When a multi-genus pipeline run completes, `MarkerCompass` generates a centraliz
 *   **`QC_Contig_Report.csv`**: An infrastructure quality control log detailing total contig counts per strain assembly, paired with an explicit `Yes/No` designation indicating if the assembly met your strict structural limits.
 *   **`LPSN_Invalid_Species_Report.csv`**: A report tracking all genomes that were dropped or flagged because their taxonomic names were identified as outdated, synonymous, or invalidly published by the LPSN database.
 *   **`genome_metadata_refseq_enriched.csv`**: A detailed metadata ledger of all processed genomes, enriched with their full taxonomy, assembly statistics, and RefSeq validation categories.
-*   **`[Taxonomic_Level]_[Target]_Cophenetic_Threats.csv`** *(e.g., `Family_Pantoea_Cophenetic_Threats.csv`)*: A log identifying the closest outgroup clades (threats) calculated during the phylogenetic scout phase to thoroughly test primer specificity against related taxa.
+*   **`[Taxonomic_Level]_[Target]_Cophenetic_Threats.csv`** *(e.g., `Family_Pantoea_Cophenetic_Threats.csv`)*: A log identifying the closest outgroup clades (threats) calculated during the phylogenetic scout phase to thoroughly test resolution specificity against related taxa.
 
 *(Note: The `primer_mismatch_report_summary.csv` is compiled from individual logs and can be found under the Primary Outputs section).*
 
