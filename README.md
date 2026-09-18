@@ -65,7 +65,7 @@ run_marker_pipeline(
   max_tax_level = "Genus",                       # Highest taxonomic tier to assess for clade resolution. Default is Genus
   n_threats = 50,                                # Number of closest outgroup genera to pull full species data for alignment
   max_scout_genera = Inf,                        # Maximum outgroup genera to fetch during the phylogenetic scout phase
-  refseq_max_age = 50,                          # Maximum age (in days) of local RefSeq summary before forcing a fresh download
+  refseq_max_age = 50,                           # Maximum age (in days) of local RefSeq summary before forcing a fresh download
   keep_genomes = FALSE                           # If FALSE, acts as a space saver by deleting .fna and .gff files after extraction but not the Genome Cache generated when going up to higher taxonomic levels, delete manually if you want to remove those files.
 )
 ```
