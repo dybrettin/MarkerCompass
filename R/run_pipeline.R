@@ -24,6 +24,7 @@
 #' @param n_threats Numeric. The number of closest outgroup genera to pull full species data and align. Defaults to 2. If wanting to look at all species in a Family or higher taxonomic level, set to Inf and make sure max_scout_genera is also set to Inf
 #' @param max_scout_genera Numeric. Maximum number of outgroup genera to fetch during the phylogenetic scout phase. Defaults to 50. Set to Inf for unlimited. A setting to tune as needed based on time and computational resources.
 #' @param keep_genomes Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space. Unless you have a lot of extra space FALSE is recommended when going above the genus level.
+#' @param make_consensus Logical. If TRUE (default), multiple distinct copies of the target gene within a single genome will be aligned and collapsed into a single consensus sequence using DECIPHER, reducing noise before PCR testing.
 #' 
 #' @importFrom dplyr %>% mutate filter arrange desc select group_by slice ungroup case_when left_join bind_rows n n_distinct relocate summarize
 #' @importFrom ggplot2 ggplot aes labs theme_bw theme geom_bar geom_text geom_area geom_rect scale_fill_manual scale_y_continuous coord_flip element_text ggsave
@@ -31,7 +32,7 @@
 #' @importFrom pwalign pairwiseAlignment alignedPattern alignedSubject
 #' @importFrom Biostrings readDNAStringSet writeXStringSet DNAStringSet DNAString reverseComplement matchPattern matchLRPatterns subseq width
 #' @importFrom IRanges subject
-#' @importFrom DECIPHER RemoveGaps DistanceMatrix AlignSeqs
+#' @importFrom DECIPHER RemoveGaps DistanceMatrix AlignSeqs ConsensusSequence
 #' @importFrom ape njs
 #' @importFrom ggtree ggtree geom_tiplab theme_tree2 hexpand
 #' @importFrom curl curl_download
@@ -56,7 +57,8 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
                              max_tax_level = "Genus",
                              n_threats = 2,
                              max_scout_genera = Inf,
-                             keep_genomes = TRUE) {
+                             keep_genomes = TRUE,
+                             make_consensus = TRUE) {
   
   # Ensure the base output directory exists
   if (!dir.exists(output_dir)) {
@@ -489,8 +491,48 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       mutate(Accession = str_extract(Seq_Name, "GCF_[0-9]+\\.[0-9]+"), Copy_Num = as.numeric(str_extract(Seq_Name, "(?<=_copy)[0-9]+")), Seq_Hash = sapply(Sequence, function(x) digest::digest(x, algo="md5"))) %>%
       group_by(Accession, Seq_Hash) %>% arrange(Copy_Num) %>% dplyr::slice(1) %>% ungroup()
     
-    general_gene <- DNAStringSet(seq_df$Sequence); names(general_gene) <- seq_df$Seq_Name
-    
+    #Form consensus seqeunces with DECIPHER. Threshold = 50% with ambiguity = TRUE
+if (make_consensus) {
+      consensus_seqs <- list()
+      accession_groups <- split(seq_df, seq_df$Accession)
+      
+      for (acc in names(accession_groups)) {
+        grp <- accession_groups[[acc]]
+        
+        if (nrow(grp) == 1) {
+          # Only one distinct allele, keep it as is
+          consensus_seqs[[grp$Seq_Name[1]]] <- grp$Sequence[1]
+        } else {
+          # Multiple distinct alleles exist in this genome. Align and collapse them.
+          message(paste("  -> Generating consensus sequence from", nrow(grp), "distinct alleles for", acc))
+          
+          # Convert strings to DNAStringSet and align them
+          allele_set <- DNAStringSet(grp$Sequence)
+          
+          # We use DECIPHER here for internal consensus alignment to avoid MAFFT IO overhead for tiny sets
+          aligned_alleles <- DECIPHER::AlignSeqs(allele_set, verbose = FALSE)
+          
+          # Generate consensus (threshold = 0.5 means majority rule, returns ambiguities if tied)
+          cons <- DECIPHER::ConsensusSequence(aligned_alleles, threshold = 0.5, ambiguity = TRUE, noConsensusChar = "N")
+          
+          # Remove internal alignment gaps from the final consensus
+          cons_clean <- as.character(DECIPHER::RemoveGaps(cons)[[1]])
+          
+          # Give it a clean name representing the collapsed genome
+          new_name <- paste0(sub("_copy[0-9]+", "", grp$Seq_Name[1]), "_consensus")
+          consensus_seqs[[new_name]] <- cons_clean
+        }
+      }
+      
+      general_gene <- DNAStringSet(unlist(consensus_seqs))
+      
+    } else {
+      # Fallback to original behavior: Just use the deduplicated sequences
+      general_gene <- DNAStringSet(seq_df$Sequence)
+      names(general_gene) <- seq_df$Seq_Name
+    }
+
+
     # PCR
     message("--- Phase 6: PCR & Alignment ---")
     smart_align <- function(seqs, mafft_exec = "mafft") {
@@ -585,7 +627,6 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
             names(current_amplicons)[length(current_amplicons)] <- paste0(names(target_seqs)[i], "_", region_name)
             
             tryCatch({
-              # Stop doing coordinate math on the full genome! 
               # Just slice the first and last N bases directly off the exact extracted amplicon (amp)
               
               fwd_bind <- as.character(subseq(amp, 1, min(length(amp), length(fwd_primer))))
@@ -646,7 +687,7 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       if(filter_ref) aln <- aln[aln_accs %in% full_metadata$assembly_accession[full_metadata$Is_VIP]]
       if(length(aln) < 3) return(NULL)
       
-      # FIX: Safe Distance Matrix and Tree Building
+      # Safe Distance Matrix and Tree Building
       d <- DECIPHER::DistanceMatrix(aln, verbose=FALSE)
       d[is.na(d)] <- 1
       d[is.nan(d)] <- 1
@@ -676,7 +717,7 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       master_aln <- readDNAStringSet(aln_file)
       generate_entropy_analysis <- function(aln_set, subset_name, title_suffix) {
         if(length(aln_set) == 0) return(NULL)
-        # --- DYNAMIC BACKBONE SELECTION ---
+        
         # Simply pick the longest available sequence to serve as the reference backbone
         best_name <- (data.frame(Name = names(aln_set), Length = width(RemoveGaps(aln_set)), stringsAsFactors = FALSE) %>% 
                         arrange(desc(Length)))$Name[1]

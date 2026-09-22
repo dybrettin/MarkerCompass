@@ -22,7 +22,8 @@ run_marker_pipeline(
   max_tax_level = "Genus",
   n_threats = 2,
   max_scout_genera = Inf,
-  keep_genomes = TRUE
+  keep_genomes = TRUE,
+  make_consensus = TRUE
 )
 }
 \arguments{
@@ -61,6 +62,8 @@ run_marker_pipeline(
 \item{max_scout_genera}{Numeric. Maximum number of outgroup genera to fetch during the phylogenetic scout phase. Defaults to 50. Set to Inf for unlimited. A setting to tune as needed based on time and computational resources.}
 
 \item{keep_genomes}{Logical. If TRUE (default), retains the downloaded .fasta and .gff files. If FALSE, deletes them after the run to save disk space. Unless you have a lot of extra space FALSE is recommended when going above the genus level.}
+
+\item{make_consensus}{Logical. If TRUE (default), multiple distinct copies of the target gene within a single genome will be aligned and collapsed into a single consensus sequence using DECIPHER, reducing noise before PCR testing.}
 }
 \value{
 Generates output folders containing alignments, trees, mismatch reports, and resolution plots.
