@@ -53,12 +53,13 @@ run_marker_pipeline(
   output_dir = "path/to/output_directory",       # Required. Path to the folder where results should be saved
   db_dir = "path/to/database_directory",         # Required. Path to the directory where Refseq master and LPSN databases are cached. Refseq database will automatically download to this directory if not found or older then refseq_max_age parameter setting
   mafft_path = NULL,                             # Path to local MAFFT executable (NULL defaults to DECIPHER alignment). Good for analysis with many sequences
-  target_gene = "16S",                           # Required. The specific gene text to search for in the .gff file
-  feature_type = "rRNA",                         # Required. The feature category to filter by (e.g., "rRNA", "CDS")
+  target_gene = "16S",                           # Required. The specific gene text to search for in the .gff file. 
+  feature_type = "rRNA",                         # Required. The feature category to filter by (e.g., "rRNA", "CDS"). 
   custom_primers = NULL,                         # Path to a .csv containing custom primers (NULL uses built-in 16S set)
-  only_reference = TRUE,                         # Recommendation = TRUE. Restricts the pipeline to only use RefSeq Reference or Representative genomes
-  dereplicate_strains = TRUE,                    # Keeps only the highest-quality genome per strain label to prevent clonal bias and removes identical copies of genes, 16S for example is multi copy
-  remove_unclassified = TRUE,                    # Automatically drops strains with ambiguous names (e.g., "sp.", "uncultured")
+  only_reference = TRUE,                         # Recommendation = TRUE. Restricts the pipeline to only use RefSeq Reference or Representative genomes. 
+  make_consensus = TRUE                          # Collapses multi-copy genes into one consensus sequence with IUPAC codes used when appropriate. 
+  dereplicate_strains = TRUE,                    # Keeps only the highest-quality genome per strain label to prevent clonal bias and removes identical copies of genes, 16S for example is multi copy. 
+  remove_unclassified = TRUE,                    # Automatically drops strains with ambiguous names (e.g., "sp.", "uncultured"). 
   enable_lpsn_check = TRUE,                      # Recommended = TRUE. Validates species names against the LPSN database to flag synonyms which usually ruins monophyletic calculations.
   lpsn_db_path = "path/to/lpsn_gss.csv",         # Path to your local LPSN database CSV file. See "Under the Hood" section for download link to database
   max_contigs = 100,                             # Maximum allowed contigs for draft genomes (RefSeq references bypass this)
@@ -132,6 +133,7 @@ The `run_marker_pipeline()` function accepts a variety of parameters to fine-tun
 ### Quality Control & Taxonomy
 * **`enable_lpsn_check`**: **(Highly Recommended)** Validates species names against the LPSN database to flag synonyms and invalidly published names. *(Default: `TRUE`)*
 * **`only_reference`**: Restricts the pipeline to only use RefSeq Reference or Representative genomes, filtering out lower-quality submissions. *(Default: `TRUE`)*
+* **`make_consensus`**: Aligns multi-copy gene sequences before making a consensus sequence based on most common nucleotide (if over 50%) at a position or inserts IUPAC coded base when appropriate. *(Default: `TRUE`)*
 * **`dereplicate_strains`**: Keeps only the highest-quality genome per strain label to prevent clonal overrepresentation in your alignments and trees. *(Default: `TRUE`)*
 * **`remove_unclassified`**: Automatically drops strains with ambiguous names like "sp.", "uncultured", or "Candidatus". *(Default: `TRUE`)*
 * **`max_contigs`**: The maximum allowed number of contigs for draft genomes. True RefSeq Reference genomes bypass this limit. *(Default: `100`)*
