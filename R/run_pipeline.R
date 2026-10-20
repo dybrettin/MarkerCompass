@@ -491,43 +491,66 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
       mutate(Accession = str_extract(Seq_Name, "GCF_[0-9]+\\.[0-9]+"), Copy_Num = as.numeric(str_extract(Seq_Name, "(?<=_copy)[0-9]+")), Seq_Hash = sapply(Sequence, function(x) digest::digest(x, algo="md5"))) %>%
       group_by(Accession, Seq_Hash) %>% arrange(Copy_Num) %>% dplyr::slice(1) %>% ungroup()
     
-    #Form consensus seqeunces with DECIPHER. Threshold = 50% with ambiguity = TRUE
-if (make_consensus) {
+
+# Form consensus sequences with DECIPHER safely (100% gene-agnostic)
+    if (make_consensus) {
       consensus_seqs <- list()
+      
+      # Use the median extracted sequence length across the genus as a dynamic reference anchor
+      genus_median_len <- median(nchar(seq_df$Sequence))
       accession_groups <- split(seq_df, seq_df$Accession)
       
       for (acc in names(accession_groups)) {
         grp <- accession_groups[[acc]]
+        grp$Seq_Len <- nchar(grp$Sequence)
         
         if (nrow(grp) == 1) {
-          # Only one distinct allele, keep it as is
+          # Single copy in genome: keep as-is (even if truncated, so PCR diagnostics can evaluate it)
           consensus_seqs[[grp$Seq_Name[1]]] <- grp$Sequence[1]
         } else {
-          # Multiple distinct alleles exist in this genome. Align and collapse them.
-          message(paste("  -> Generating consensus sequence from", nrow(grp), "distinct alleles for", acc))
+          # 1. Relative Length Filter: If the genome has at least one copy within the normal 
+          # full-length window (85% to 115% of the genus median), drop truncated contig-edge 
+          # fragments (<85%) and oversized contaminant/chimeric extractions (>115%).
+          valid_len_mask <- (grp$Seq_Len >= 0.85 * genus_median_len) & (grp$Seq_Len <= 1.15 * genus_median_len)
+          if (any(valid_len_mask)) {
+            grp <- grp[valid_len_mask, , drop = FALSE]
+          }
           
-          # Convert strings to DNAStringSet and align them
-          allele_set <- DNAStringSet(grp$Sequence)
-          
-          # We use DECIPHER here for internal consensus alignment to avoid MAFFT IO overhead for tiny sets
-          aligned_alleles <- DECIPHER::AlignSeqs(allele_set, verbose = FALSE)
-          
-          # Generate consensus (threshold = 0.5 means majority rule, returns ambiguities if tied)
-          cons <- DECIPHER::ConsensusSequence(aligned_alleles, threshold = 0.5, ambiguity = TRUE, noConsensusChar = "N")
-          
-          # Remove internal alignment gaps from the final consensus
-          cons_clean <- as.character(DECIPHER::RemoveGaps(cons)[[1]])
-          
-          # Give it a clean name representing the collapsed genome
-          new_name <- paste0(sub("_copy[0-9]+", "", grp$Seq_Name[1]), "_consensus")
-          consensus_seqs[[new_name]] <- cons_clean
+          if (nrow(grp) == 1) {
+            consensus_seqs[[grp$Seq_Name[1]]] <- grp$Sequence[1]
+          } else {
+            allele_set <- DNAStringSet(grp$Sequence)
+            aligned_alleles <- DECIPHER::AlignSeqs(allele_set, verbose = FALSE)
+            
+            # 2. Pairwise Divergence & Overlap Check (ignoring terminal gaps)
+            # True intragenomic copies of a marker gene should not diverge by >10% (0.10)
+            d_mat <- suppressWarnings(DECIPHER::DistanceMatrix(aligned_alleles, includeTerminalGaps = FALSE, verbose = FALSE))
+            
+            if (any(is.na(d_mat)) || max(d_mat, na.rm = TRUE) > 0.10) {
+              # Non-overlapping split contigs (NA) or foreign contaminant/paralog (>10% divergence):
+              # Do NOT mash into a chimeric consensus. Keep the single copy closest to the genus median length.
+              message(paste("  -> [QC WARNING] Divergent or non-overlapping copies in", acc, "- Keeping copy closest to genus median length."))
+              best_idx <- which.min(abs(grp$Seq_Len - genus_median_len))
+              consensus_seqs[[grp$Seq_Name[best_idx]]] <- grp$Sequence[best_idx]
+            } else {
+              message(paste("  -> Generating consensus sequence from", nrow(grp), "distinct alleles for", acc))
+              # includeTerminalGaps = FALSE prevents slightly shorter ends from diluting the 50% threshold
+              cons <- DECIPHER::ConsensusSequence(
+                aligned_alleles, 
+                threshold = 0.5, 
+                ambiguity = TRUE, 
+                noConsensusChar = "N",
+                includeTerminalGaps = FALSE
+              )
+              cons_clean <- as.character(DECIPHER::RemoveGaps(cons)[[1]])
+              new_name <- paste0(sub("_copy[0-9]+", "", grp$Seq_Name[1]), "_consensus")
+              consensus_seqs[[new_name]] <- cons_clean
+            }
+          }
         }
       }
-      
       general_gene <- DNAStringSet(unlist(consensus_seqs))
-      
     } else {
-      # Fallback to original behavior: Just use the deduplicated sequences
       general_gene <- DNAStringSet(seq_df$Sequence)
       names(general_gene) <- seq_df$Seq_Name
     }
@@ -591,85 +614,229 @@ if (make_consensus) {
     writeXStringSet(target_seqs, file.path(dir_alignments, paste0("Alignment_Full_Extracted_", target_gene, ".fasta")))
     primer_mismatch_report <- data.frame() 
     
+    # Helper: Map an un-gapped base position (1-based) to its column index in the aligned sequence
+    ug_pos_to_aln_col <- function(aln_char_vec, ug_pos) {
+      non_gap_cols <- which(aln_char_vec != "-")
+      if (length(non_gap_cols) == 0) return(NA_integer_)
+      ug_pos <- max(1, min(ug_pos, length(non_gap_cols)))
+      return(non_gap_cols[ug_pos])
+    }
+    
+    # Helper: Find the best local binding site of a primer on an un-gapped DNAString (IUPAC-aware, no indels)
+    find_best_primer_site <- function(primer_dna, subj_dna) {
+      p_len <- length(primer_dna)
+      if (length(subj_dna) < p_len) return(NULL)
+      # Search with increasing mismatch tolerance up to primer length
+      for (mm in 0:p_len) {
+        hits <- Biostrings::matchPattern(primer_dna, subj_dna, max.mismatch = mm, with.indels = FALSE, fixed = FALSE)
+        if (length(hits) > 0) {
+          # Take first best hit
+          s_pos <- Biostrings::start(hits)[1]
+          e_pos <- Biostrings::end(hits)[1]
+          hit_seq <- as.character(Biostrings::subseq(subj_dna, s_pos, e_pos))
+          res <- get_mismatch_info(as.character(primer_dna), hit_seq)
+          return(list(Start = s_pos, End = e_pos, Target_Seq = res$Target_Seq, Visual = res$Visual, Misses = res$Misses))
+        }
+      }
+      return(NULL)
+    }
+
+    # Pre-calculate the first and last non-gap alignment column for every sequence in target_seqs
+    aln_matrix <- strsplit(as.character(target_seqs), "")
+    seq_start_cols <- sapply(aln_matrix, function(x) { idx <- which(x != "-"); if(length(idx)>0) idx[1] else NA_integer_ })
+    seq_end_cols   <- sapply(aln_matrix, function(x) { idx <- which(x != "-"); if(length(idx)>0) idx[length(idx)] else NA_integer_ })
+    genus_min_col  <- min(seq_start_cols, na.rm = TRUE)
+    genus_max_col  <- max(seq_end_cols, na.rm = TRUE)
+
     for (region_name in names(primer_sets)) {
       p_info <- primer_sets[[region_name]]
-      fwd_primer <- DNAString(p_info$Fwd); rev_primer <- DNAString(p_info$Rev)
+      fwd_primer <- DNAString(p_info$Fwd)
+      rev_primer <- DNAString(p_info$Rev)
+      rev_primer_rc <- reverseComplement(rev_primer)
+      
+      safe_min <- suppressWarnings(as.numeric(p_info$Min)[1]); if(is.na(safe_min)) safe_min <- 0
+      safe_max <- suppressWarnings(as.numeric(p_info$Max)[1]); if(is.na(safe_max)) safe_max <- 10000
+      
       current_amplicons <- DNAStringSet()
       
-      for(i in seq_along(target_seqs)) {
-        subj <- RemoveGaps(target_seqs[i])[[1]]; subj_rc <- reverseComplement(subj)
+      # Track where Fwd and Rev primers bind in alignment column coordinates across successful hits
+      fwd_aln_cols <- c()
+      rev_aln_cols <- c()
+      temp_rows <- vector("list", length(target_seqs))
+      
+      # Pass 1: Run in-silico PCR on all sequences in the genus
+      for (i in seq_along(target_seqs)) {
+        subj <- RemoveGaps(target_seqs[i])[[1]]
+        subj_rc <- reverseComplement(subj)
         
-        # Explicitly setting Lfixed/Rfixed=FALSE allows matchLRPatterns to read IUPAC correctly
-        # 1. Look for any characters that are NOT standard A, C, G, or T
         fwd_degen <- grepl("[^ACGT]", as.character(fwd_primer), ignore.case = TRUE)
         rev_degen <- grepl("[^ACGT]", as.character(rev_primer), ignore.case = TRUE)
-        
-        # 2. If EITHER primer has degenerate bases, turn indels OFF. Otherwise, leave them ON.
         allow_indels <- !(fwd_degen || rev_degen)
 
-        # 3. Pass the dynamic variable to the function
-        run_pcr <- function(s) matchLRPatterns(fwd_primer, reverseComplement(rev_primer), s, 
-                                               max.gaplength=as.numeric(p_info$Max), max.Lmismatch=5, max.Rmismatch=5, 
-                                               with.Lindels=allow_indels, with.Rindels=allow_indels, Lfixed=FALSE, Rfixed=FALSE)
+        run_pcr <- function(s) matchLRPatterns(
+          fwd_primer, rev_primer_rc, s, 
+          max.gaplength = safe_max, max.Lmismatch = 5, max.Rmismatch = 5, 
+          with.Lindels = allow_indels, with.Rindels = allow_indels, Lfixed = FALSE, Rfixed = FALSE
+        )
         
         v1 <- run_pcr(subj); v2 <- run_pcr(subj_rc); hit <- NULL; orientation <- "Fwd"
-        if(length(v1)>0) { hit <- v1[which.max(width(v1))] } else if(length(v2)>0) { hit <- v2[which.max(width(v2))]; orientation <- "Rev" }
+        if (length(v1) > 0) {
+          hit <- v1[which.max(width(v1))]
+        } else if (length(v2) > 0) {
+          hit <- v2[which.max(width(v2))]
+          orientation <- "Rev"
+        }
         
-        if(!is.null(hit)) {
+        pcr_succeeded <- FALSE
+        if (!is.null(hit)) {
           amp <- as(hit, "DNAStringSet")[[1]]
-          
-          # Safely read min/max from CSV without crashing on NAs
-          safe_min <- suppressWarnings(as.numeric(p_info$Min)[1]); if(is.na(safe_min)) safe_min <- 0
-          safe_max <- suppressWarnings(as.numeric(p_info$Max)[1]); if(is.na(safe_max)) safe_max <- 10000
-          
-          if(isTRUE(length(amp) >= safe_min && length(amp) <= safe_max)) {
+          if (isTRUE(length(amp) >= safe_min && length(amp) <= safe_max)) {
+            pcr_succeeded <- TRUE
             current_amplicons <- c(current_amplicons, DNAStringSet(amp))
             names(current_amplicons)[length(current_amplicons)] <- paste0(names(target_seqs)[i], "_", region_name)
             
-            tryCatch({
-              # Just slice the first and last N bases directly off the exact extracted amplicon (amp)
-              
-              fwd_bind <- as.character(subseq(amp, 1, min(length(amp), length(fwd_primer))))
-              rev_bind <- as.character(subseq(amp, max(1, length(amp) - length(rev_primer) + 1), length(amp)))
-              
-              # Pad with gaps if an indel caused it to be slightly shorter than the primer
-              if(nchar(fwd_bind) < length(fwd_primer)) fwd_bind <- paste0(fwd_bind, strrep("-", length(fwd_primer) - nchar(fwd_bind)))
-              if(nchar(rev_bind) < length(rev_primer)) rev_bind <- paste0(strrep("-", length(rev_primer) - nchar(rev_bind)), rev_bind)
-              
-              # Run our custom visual alignment function (using your fixed manual iteration version!)
-              f_res <- get_mismatch_info(as.character(fwd_primer), fwd_bind)
-              r_res <- get_mismatch_info(as.character(reverseComplement(rev_primer)), rev_bind)
-              
-              total_miss <- f_res$Misses + r_res$Misses
-              
-              # Optional filter: If you don't want 35-mismatch garbage in your CSV, uncomment the 'if' statement
-              # if(total_miss <= 15) {
-                  primer_mismatch_report <- rbind(primer_mismatch_report, data.frame(
-                    Bacterium = gsub("_", " ", sub("_copy.*", "", names(target_seqs)[i])), 
-                    Region = region_name, 
-                    Primer_Fwd = as.character(fwd_primer),
-                    Target_Fwd_Seq = f_res$Target_Seq,
-                    Visual_Fwd_Match = f_res$Visual,
-                    Mismatches_Fwd = f_res$Misses,
-                    Primer_Rev = as.character(reverseComplement(rev_primer)),
-                    Target_Rev_Seq = r_res$Target_Seq,
-                    Visual_Rev_Match = r_res$Visual,
-                    Mismatches_Rev = r_res$Misses,
-                    Total_Mismatches = total_miss,
-                    stringsAsFactors = FALSE
-                  ))
-              # }
-            }, error=function(e) { message(paste("  -> [WARNING] Mismatch mapping failed for a genome:", e$message)) })
-          
-          } else {
-            message(paste("  -> [PCR INFO] Amplicon length outside bounds for:", names(target_seqs)[i], "using primer set", region_name))
+            # Record alignment columns of successful binding sites (if in Fwd orientation)
+            if (orientation == "Fwd") {
+              f_col_s <- ug_pos_to_aln_col(aln_matrix[[i]], Biostrings::start(hit))
+              r_col_e <- ug_pos_to_aln_col(aln_matrix[[i]], Biostrings::end(hit))
+              fwd_aln_cols <- c(fwd_aln_cols, f_col_s)
+              rev_aln_cols <- c(rev_aln_cols, r_col_e)
+            }
+            
+            fwd_bind <- as.character(subseq(amp, 1, min(length(amp), length(fwd_primer))))
+            rev_bind <- as.character(subseq(amp, max(1, length(amp) - length(rev_primer) + 1), length(amp)))
+            if (nchar(fwd_bind) < length(fwd_primer)) fwd_bind <- paste0(fwd_bind, strrep("-", length(fwd_primer) - nchar(fwd_bind)))
+            if (nchar(rev_bind) < length(rev_primer)) rev_bind <- paste0(strrep("-", length(rev_primer) - nchar(rev_bind)), rev_bind)
+            
+            f_res <- get_mismatch_info(as.character(fwd_primer), fwd_bind)
+            r_res <- get_mismatch_info(as.character(rev_primer_rc), rev_bind)
+            
+            # Double-check <= 5 mismatch threshold for diagnostic call
+            pcr_call <- ifelse(f_res$Misses <= 5 && r_res$Misses <= 5, "Yes", "No")
+            
+            temp_rows[[i]] <- list(
+              success = TRUE,
+              row = data.frame(
+                Bacterium = gsub("_", " ", sub("_(copy|consensus).*", "", names(target_seqs)[i])),
+                Region = region_name,
+                PCR_Status = pcr_call,
+                Primer_Fwd = as.character(fwd_primer),
+                Target_Fwd_Seq = f_res$Target_Seq,
+                Visual_Fwd_Match = f_res$Visual,
+                Mismatches_Fwd = f_res$Misses,
+                Primer_Rev = as.character(rev_primer_rc),
+                Target_Rev_Seq = r_res$Target_Rev_Seq <- r_res$Target_Seq,
+                Visual_Rev_Match = r_res$Visual,
+                Mismatches_Rev = r_res$Misses,
+                Total_Mismatches = f_res$Misses + r_res$Misses,
+                stringsAsFactors = FALSE
+              )
+            )
           }
-        } else {
-          message(paste("  -> [PCR INFO] No amplicons generated for:", names(target_seqs)[i], "using primer set", region_name))
+        }
+        
+        if (!pcr_succeeded) {
+          temp_rows[[i]] <- list(success = FALSE, seq_idx = i)
         }
       }
       
-      if(length(current_amplicons) >= 1) { 
+      # Establish consensus alignment column anchors for Fwd and Rev primers (if any sequence in the genus amplified)
+      expected_fwd_col <- if (length(fwd_aln_cols) > 0) median(fwd_aln_cols, na.rm = TRUE) else NA_real_
+      expected_rev_col <- if (length(rev_aln_cols) > 0) median(rev_aln_cols, na.rm = TRUE) else NA_real_
+      
+      # Pass 2: Diagnose all failed sequences (Truncated vs. Binding Failure 'No')
+      for (i in seq_along(target_seqs)) {
+        if (!temp_rows[[i]]$success) {
+          subj <- RemoveGaps(target_seqs[i])[[1]]
+          bact_name <- gsub("_", " ", sub("_(copy|consensus).*", "", names(target_seqs)[i]))
+          
+          # Locate best independent binding sites on the available sequence
+          f_hit <- find_best_primer_site(fwd_primer, subj)
+          r_hit <- find_best_primer_site(rev_primer_rc, subj)
+          
+          # Determine if 5' (Fwd) or 3' (Rev) binding region is physically truncated off this sequence
+          fwd_truncated <- FALSE
+          rev_truncated <- FALSE
+          
+          # Case A: We have alignment column anchors from other species in the genus
+          if (!is.na(expected_fwd_col) && !is.na(seq_start_cols[i])) {
+            if (seq_start_cols[i] > (expected_fwd_col + 5)) fwd_truncated <- TRUE
+          }
+          if (!is.na(expected_rev_col) && !is.na(seq_end_cols[i])) {
+            if (seq_end_cols[i] < (expected_rev_col - 5)) rev_truncated <- TRUE
+          }
+          
+          # Case B: Single-species genus or all species failed PCR (no alignment anchors)
+          if (is.na(expected_fwd_col) || is.na(expected_rev_col)) {
+            if (length(subj) < safe_min) {
+              # Sequence is shorter than the minimum possible amplicon
+              fwd_truncated <- is.null(f_hit) || f_hit$Misses > 5
+              rev_truncated <- is.null(r_hit) || r_hit$Misses > 5
+              if (!fwd_truncated && !rev_truncated) { fwd_truncated <- TRUE; rev_truncated <- TRUE }
+            } else {
+              # If Fwd binds well (<=5 mm), but distance from Fwd start to 3' contig end < safe_min -> 3' Rev is truncated!
+              if (!is.null(f_hit) && f_hit$Misses <= 5 && (length(subj) - f_hit$Start + 1) < safe_min) {
+                rev_truncated <- TRUE
+              }
+              # If Rev binds well (<=5 mm), but distance from 5' contig start to Rev end < safe_min -> 5' Fwd is truncated!
+              if (!is.null(r_hit) && r_hit$Misses <= 5 && r_hit$End < safe_min) {
+                fwd_truncated <- TRUE
+              }
+              # Also check if sequence starts significantly after genus_min_col or ends before genus_max_col
+              if (!is.null(f_hit) && f_hit$Misses > 5 && (seq_start_cols[i] - genus_min_col) > 50) {
+                fwd_truncated <- TRUE
+              }
+              if (!is.null(r_hit) && r_hit$Misses > 5 && (genus_max_col - seq_end_cols[i]) > 50) {
+                rev_truncated <- TRUE
+              }
+            }
+          }
+          
+          # Format Fwd and Rev values (set Mismatches to NA if that primer site was truncated!)
+          t_fwd_seq <- if (fwd_truncated || is.null(f_hit)) "TRUNCATED" else f_hit$Target_Seq
+          v_fwd_str <- if (fwd_truncated || is.null(f_hit)) "TRUNCATED" else f_hit$Visual
+          m_fwd_val <- if (fwd_truncated || is.null(f_hit)) NA_real_    else f_hit$Misses
+          
+          t_rev_seq <- if (rev_truncated || is.null(r_hit)) "TRUNCATED" else r_hit$Target_Seq
+          v_rev_str <- if (rev_truncated || is.null(r_hit)) "TRUNCATED" else r_hit$Visual
+          m_rev_val <- if (rev_truncated || is.null(r_hit)) NA_real_    else r_hit$Misses
+          
+          # Final Diagnostic Call:
+          # - If an intact primer site already has >5 mismatches, it's a definitive "No" (Binding Failure)
+          # - Otherwise, if either primer site is truncated, it's "Truncated"
+          # - Otherwise (e.g. both primers <=5 mismatches, but amplicon length fell outside Min/Max), it's "No"
+          if ((!is.na(m_fwd_val) && m_fwd_val > 5) || (!is.na(m_rev_val) && m_rev_val > 5)) {
+            pcr_call <- "No"
+          } else if (fwd_truncated || rev_truncated) {
+            pcr_call <- "Truncated"
+          } else {
+            pcr_call <- "No"
+          }
+          
+          message(paste0("  -> [PCR ", pcr_call, "] ", names(target_seqs)[i], " (", region_name, 
+                         "): Fwd_MM=", ifelse(is.na(m_fwd_val), "TRUNC", m_fwd_val), 
+                         ", Rev_MM=", ifelse(is.na(m_rev_val), "TRUNC", m_rev_val)))
+          
+          temp_rows[[i]]$row <- data.frame(
+            Bacterium = bact_name,
+            Region = region_name,
+            PCR_Status = pcr_call,
+            Primer_Fwd = as.character(fwd_primer),
+            Target_Fwd_Seq = t_fwd_seq,
+            Visual_Fwd_Match = v_fwd_str,
+            Mismatches_Fwd = m_fwd_val,
+            Primer_Rev = as.character(rev_primer_rc),
+            Target_Rev_Seq = t_rev_seq,
+            Visual_Rev_Match = v_rev_str,
+            Mismatches_Rev = m_rev_val,
+            Total_Mismatches = ifelse(is.na(m_fwd_val) || is.na(m_rev_val), NA_real_, m_fwd_val + m_rev_val),
+            stringsAsFactors = FALSE
+          )
+        }
+        primer_mismatch_report <- rbind(primer_mismatch_report, temp_rows[[i]]$row)
+      }
+      
+      if (length(current_amplicons) >= 1) { 
         aln <- smart_align(current_amplicons, mafft_exec = mafft_path) 
         writeXStringSet(aln, file.path(dir_alignments, paste0("Alignment_", region_name, ".fasta"))) 
       }
