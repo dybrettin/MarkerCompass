@@ -623,19 +623,22 @@ run_marker_pipeline <- function(target_genera = c("Commensalibacter", "Apilactob
     }
     
     # Helper: Find the best local binding site of a primer on an un-gapped DNAString (IUPAC-aware, no indels)
-    find_best_primer_site <- function(primer_dna, subj_dna) {
+  find_best_primer_site <- function(primer_dna, subj_dna) {
       p_len <- length(primer_dna)
       if (length(subj_dna) < p_len) return(NULL)
       # Search with increasing mismatch tolerance up to primer length
       for (mm in 0:p_len) {
         hits <- Biostrings::matchPattern(primer_dna, subj_dna, max.mismatch = mm, with.indels = FALSE, fixed = FALSE)
         if (length(hits) > 0) {
-          # Take first best hit
-          s_pos <- Biostrings::start(hits)[1]
-          e_pos <- Biostrings::end(hits)[1]
-          hit_seq <- as.character(Biostrings::subseq(subj_dna, s_pos, e_pos))
-          res <- get_mismatch_info(as.character(primer_dna), hit_seq)
-          return(list(Start = s_pos, End = e_pos, Target_Seq = res$Target_Seq, Visual = res$Visual, Misses = res$Misses))
+          # Take first best hit and safely clamp coordinates to sequence boundaries
+          s_pos <- max(1, Biostrings::start(hits)[1])
+          e_pos <- min(length(subj_dna), Biostrings::end(hits)[1])
+          
+          if (s_pos <= e_pos) {
+            hit_seq <- as.character(Biostrings::subseq(subj_dna, s_pos, e_pos))
+            res <- get_mismatch_info(as.character(primer_dna), hit_seq)
+            return(list(Start = s_pos, End = e_pos, Target_Seq = res$Target_Seq, Visual = res$Visual, Misses = res$Misses))
+          }
         }
       }
       return(NULL)
